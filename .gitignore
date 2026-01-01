@@ -1,0 +1,107 @@
+# ===========================
+# Spotisync .gitignore
+# ===========================
+
+# --------------------------
+# Environment & Secrets
+# --------------------------
+
+# Root environment file (contains secrets)
+.env
+!.env.example
+
+# --------------------------
+# Backend (Go)
+# --------------------------
+
+# Configuration with secrets (example is tracked for local dev)
+backend/config.yaml
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+
+# Data directory (contains DB and temp files)
+backend/data/
+
+# Compiled binary
+backend/spotisync
+spotisync
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# --------------------------
+# Frontend (Next.js)
+# --------------------------
+
+# Dependencies
+frontend/node_modules/
+node_modules/
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# Environment files with secrets
+frontend/.env.local
+frontend/.env*.local
+.env.local
+.env*.local
+
+# --------------------------
+# IDE / Editor
+# --------------------------
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# --------------------------
+# Operating System
+# --------------------------
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --------------------------
+# Miscellaneous
+# --------------------------
+
+# Log files
+*.log
+logs/
+
+# Temporary directories
+tmp/
+temp/
+
+# Coverage reports
+coverage/
+*.cover
+*.coverage
+
+# Build outputs
+dist/
+build/

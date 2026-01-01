@@ -1,0 +1,4 @@
+// Placeholder favicon
+export default function Favicon() {
+  return null
+}

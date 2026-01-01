@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Dependencies
+**/node_modules
+**/__pycache__
+
+# Build outputs
+**/.next
+**/dist
+**/build
+
+# Environment files (should be set via docker-compose)
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+**/*_test.go
+**/test
+**/tests
+**/__tests__
+
+# Documentation
+*.md
+LICENSE
+
+# SpotiFLAC reference (don't include in Docker)
+SpotiFLAC/
+
+# Temporary files
+*.tmp
+*.temp
+*.log

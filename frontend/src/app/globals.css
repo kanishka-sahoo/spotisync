@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* Tailwind v4 theme customization */
+@theme {
+  /* Spotify brand colors */
+  --color-spotify-green: #1DB954;
+  --color-spotify-black: #191414;
+  
+  /* App colors */
+  --color-background: #000000;
+  --color-foreground: #ffffff;
+  
+  /* Ring offset for focus states */
+  --color-ring: #1DB954;
+  --color-ring-offset-background: #000000;
+}
+
+/* Custom CSS variables for gradient backgrounds */
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 0, 0, 0;
+  --background-end-rgb: 25, 20, 20;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+}

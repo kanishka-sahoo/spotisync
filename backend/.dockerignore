@@ -1,0 +1,24 @@
+# Git
+.git
+.gitignore
+
+# Test files
+*_test.go
+
+# IDE
+.vscode
+.idea
+
+# OS files
+.DS_Store
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+spotisync-server
+
+# Data directory (should use Docker volumes)
+data/

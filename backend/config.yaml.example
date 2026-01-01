@@ -1,0 +1,66 @@
+# Spotisync Configuration File
+# Copy this file to config.yaml and customize for your environment
+# All settings can be overridden via environment variables
+
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 8000
+  env: "development"  # development | production
+  log_level: "info"   # debug | info | warn | error
+
+# Database Configuration
+database:
+  path: "./data/spotisync.db"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+# Storage Configuration
+storage:
+  music_root: "/path/to/your/music/library"  # CHANGE THIS - Your music library path
+  temp_dir: "./data/temp"
+  max_file_size: 500MB
+
+# Workers Configuration
+workers:
+  count: 2          # Number of concurrent download workers
+  retry_max: 3      # Maximum retry attempts for failed downloads
+  retry_delays:
+    - 1m
+    - 5m
+    - 15m
+
+# Spotify Configuration (optional - can be configured per-user via UI)
+spotify:
+  # Server-level Spotify credentials (if needed)
+  # client_id: ""
+  # client_secret: ""
+
+# Tidal Configuration (optional - can be configured per-user via UI)
+tidal:
+  # Server-level Tidal credentials (if needed)
+  # username: ""
+  # password: ""
+
+# Qobuz Configuration (optional - can be configured per-user via UI)
+qobuz:
+  # Server-level Qobuz credentials (if needed)
+  # username: ""
+  # password: ""
+
+# Navidrome Integration
+navidrome:
+  host: ""    # Your Navidrome server URL (e.g., http://navidrome:4533 or https://navidrome.example.com)
+  username: ""  # Admin username for library scans (if using Navidrome integration)
+  password: ""  # Admin password (if using Navidrome integration)
+
+# WebSocket Configuration
+websocket:
+  ping_interval: 30s
+  pong_timeout: 10s
+
+# Rate Limiting Configuration
+rate_limit:
+  requests_per_minute: 100
+  burst: 20
