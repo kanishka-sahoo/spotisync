@@ -63,6 +63,7 @@ type Job struct {
 
 	// Download info
 	Status        JobStatus     `json:"status"`
+	InPlaylist    bool          `json:"in_playlist"`
 	SourceService SourceService `json:"source_service,omitempty"`
 	SourceID      string        `json:"source_id,omitempty"`
 	LocalPath     string        `json:"local_path,omitempty"`
@@ -175,6 +176,7 @@ type JobResponse struct {
 	LyricsStatus    string        `json:"lyrics_status,omitempty"`
 	CoverStatus     string        `json:"cover_status,omitempty"`
 	Status          JobStatus     `json:"status"`
+	InPlaylist      bool          `json:"in_playlist"`
 	SourceService   SourceService `json:"source_service,omitempty"`
 	LocalPath       string        `json:"local_path,omitempty"`
 	CoverPath       string        `json:"cover_path,omitempty"`
@@ -216,6 +218,7 @@ func (j *Job) ToResponse() *JobResponse {
 		LyricsStatus:    j.LyricsStatus,
 		CoverStatus:     j.CoverStatus,
 		Status:          j.Status,
+		InPlaylist:      j.InPlaylist,
 		SourceService:   j.SourceService,
 		LocalPath:       j.LocalPath,
 		CoverPath:       j.CoverPath,

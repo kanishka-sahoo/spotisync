@@ -100,6 +100,7 @@ export interface Job {
   completed_at?: string;
   created_at: string;
   updated_at: string;
+  in_playlist?: boolean;
   // Legacy field mappings for backwards compatibility
   type?: 'sync' | 'download';
   title?: string;

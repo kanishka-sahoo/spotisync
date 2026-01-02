@@ -122,6 +122,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		r.Get("/api/v1/batches/{id}", handlers.NewJobsHandler(database, jobScheduler, jwtManager, cfg).GetBatchJobs)
 		r.Delete("/api/v1/batches/{id}", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).DeleteBatch)
 		r.Post("/api/v1/batches/{id}/retry", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).RetryBatch)
+		r.Post("/api/v1/batches/{id}/resync", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).ResyncBatch)
 
 		// Settings routes
 		r.Get("/api/v1/settings", handlers.NewSettingsHandler(database, jwtManager, cfg).GetSettings)

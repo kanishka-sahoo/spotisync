@@ -175,6 +175,9 @@ func (d *Database) migrate() error {
 	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN tracks_found INTEGER DEFAULT 0")
 	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN tracks_failed INTEGER DEFAULT 0")
 
+	// Migrate existing databases: add in_playlist column to jobs table
+	_, _ = d.Exec("ALTER TABLE jobs ADD COLUMN in_playlist INTEGER DEFAULT 0")
+
 	// Enable WAL mode for better concurrency
 	if _, err := d.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		return fmt.Errorf("failed to enable WAL mode: %w", err)
@@ -400,6 +403,16 @@ func (d *Database) UpdateBatchStatus(id string, status models.BatchStatus, compl
 	return err
 }
 
+// UpdateBatchStatusIfMatching updates the batch status only if the current status matches the expected status
+// This is an atomic operation that prevents race conditions when updating batch status
+func (d *Database) UpdateBatchStatusIfMatching(id string, status models.BatchStatus, completedJobs, failedJobs int, expectedStatus models.BatchStatus) error {
+	_, err := d.Exec(
+		`UPDATE batches SET status = ?, completed_jobs = ?, failed_jobs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?`,
+		status, completedJobs, failedJobs, id, expectedStatus,
+	)
+	return err
+}
+
 // UpdateBatchPlaylistStatus updates the playlist-related fields of a batch
 func (d *Database) UpdateBatchPlaylistStatus(id string, status models.PlaylistStatus, playlistID, message string, tracksFound, tracksFailed int) error {
 	_, err := d.Exec(
@@ -582,6 +595,49 @@ func (d *Database) GetJobsByBatchID(batchID string) ([]*models.Job, error) {
 	return jobs, nil
 }
 
+// GetIncompleteJobsByBatchID retrieves all incomplete jobs for a batch
+// Incomplete means status is not 'completed', 'skipped', or 'in_progress'
+func (d *Database) GetIncompleteJobsByBatchID(batchID string) ([]*models.Job, error) {
+	rows, err := d.Query(
+		`SELECT id, batch_id, user_id, spotify_track_id, isrc, track_name, artist_name, artists, album_name, album_artist, album_artists,
+			track_number, disc_number, total_tracks, total_discs, duration_ms, release_year, release_date, cover_art_url,
+			song_status, lyrics_status, cover_status, status,
+			source_service, source_id, local_path, cover_path, lyrics_path, file_size, retry_count, error_message,
+			progress, download_speed, bytes_downloaded, bytes_total, started_at, completed_at, created_at, updated_at
+		 FROM jobs WHERE batch_id = ? AND status NOT IN ('completed', 'skipped', 'in_progress') ORDER BY created_at ASC`,
+		batchID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*models.Job
+	for rows.Next() {
+		var job models.Job
+		var artistsJSON, albumArtistsJSON sql.NullString
+		if err := rows.Scan(&job.ID, &job.BatchID, &job.UserID, &job.SpotifyTrackID, &job.ISRC, &job.TrackName,
+			&job.ArtistName, &artistsJSON, &job.AlbumName, &job.AlbumArtist, &albumArtistsJSON, &job.TrackNumber, &job.DiscNumber, &job.TotalTracks,
+			&job.TotalDiscs, &job.DurationMs, &job.ReleaseYear, &job.ReleaseDate, &job.CoverArtURL,
+			&job.SongStatus, &job.LyricsStatus, &job.CoverStatus, &job.Status,
+			&job.SourceService,
+			&job.SourceID, &job.LocalPath, &job.CoverPath, &job.LyricsPath, &job.FileSize, &job.RetryCount,
+			&job.ErrorMessage, &job.Progress, &job.DownloadSpeed, &job.BytesDownloaded, &job.BytesTotal,
+			&job.StartedAt, &job.CompletedAt, &job.CreatedAt, &job.UpdatedAt); err != nil {
+			return nil, err
+		}
+		// Parse artists JSON
+		if artistsJSON.Valid && artistsJSON.String != "" {
+			json.Unmarshal([]byte(artistsJSON.String), &job.Artists)
+		}
+		if albumArtistsJSON.Valid && albumArtistsJSON.String != "" {
+			json.Unmarshal([]byte(albumArtistsJSON.String), &job.AlbumArtists)
+		}
+		jobs = append(jobs, &job)
+	}
+	return jobs, nil
+}
+
 // UpdateJobStatus updates the status and details of a job
 func (d *Database) UpdateJobStatus(id string, status models.JobStatus, sourceService, sourceID, localPath string,
 	coverPath, lyricsPath string, fileSize int64, errorMessage string, progress float64) error {
@@ -704,6 +760,19 @@ func (d *Database) UpdateJobGranularStatus(id, songStatus, lyricsStatus, coverSt
 		`UPDATE jobs SET song_status = ?, lyrics_status = ?, cover_status = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		songStatus, lyricsStatus, coverStatus, id,
+	)
+	return err
+}
+
+// UpdateJobInPlaylist updates the in_playlist field for a job
+func (d *Database) UpdateJobInPlaylist(jobID string, inPlaylist bool) error {
+	inPlaylistInt := 0
+	if inPlaylist {
+		inPlaylistInt = 1
+	}
+	_, err := d.Exec(
+		`UPDATE jobs SET in_playlist = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		inPlaylistInt, jobID,
 	)
 	return err
 }

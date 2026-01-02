@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"spotisync/internal/api/handlers"
@@ -318,6 +319,18 @@ func TestBatchIsolation(t *testing.T) {
 	})
 }
 
+// createTestJob creates a job with a specific status for testing
+func createTestJob(t *testing.T, database *db.Database, batchID string, userID int64, status models.JobStatus) *models.Job {
+	job := models.NewJob(batchID, userID, &models.SpotifyTrack{
+		ID:   "test-track-id",
+		Name: "Test Track",
+	})
+	job.Status = status
+	err := database.CreateJob(job)
+	require.NoError(t, err)
+	return job
+}
+
 // TestBatchListingOrder tests that batches are listed in descending order by creation date
 func TestBatchListingOrder(t *testing.T) {
 	handler, _, database, jwtManager := setupBatchesHandler(t)
@@ -347,4 +360,121 @@ func TestBatchListingOrder(t *testing.T) {
 	assert.Equal(t, batch3.ID, batches[0].ID)
 	assert.Equal(t, batch2.ID, batches[1].ID)
 	assert.Equal(t, batch1.ID, batches[2].ID)
+}
+
+// TestBatchResync tests the ResyncBatch endpoint
+func TestBatchResync(t *testing.T) {
+	handler, _, database, jwtManager := setupBatchesHandler(t)
+	userID, token := createTestUser(t, database, jwtManager)
+	_, token2 := createSecondTestUser(t, database, jwtManager)
+
+	tests := []struct {
+		name             string
+		batchID          string
+		jobs             []models.JobStatus
+		token            string
+		expectedStatus   int
+		expectedResynced int
+	}{
+		{
+			name:             "resync successfully with mixed statuses",
+			batchID:          "", // will set in the test
+			jobs:             []models.JobStatus{models.JobStatusCompleted, models.JobStatusPending, models.JobStatusInProgress, models.JobStatusFailed, models.JobStatusNotFound},
+			token:            token,
+			expectedStatus:   http.StatusOK,
+			expectedResynced: 3, // pending, failed, not_found (completed and in_progress are excluded)
+		},
+		{
+			name:             "resync batch with all completed jobs",
+			batchID:          "", // will set in the test
+			jobs:             []models.JobStatus{models.JobStatusCompleted, models.JobStatusCompleted},
+			token:            token,
+			expectedStatus:   http.StatusOK,
+			expectedResynced: 0,
+		},
+		{
+			name:             "resync non-existent batch",
+			batchID:          uuid.New().String(), // valid UUID format that doesn't exist
+			token:            token,
+			expectedStatus:   http.StatusNotFound,
+			expectedResynced: 0,
+		},
+		{
+			name:             "resync without authentication",
+			batchID:          "", // will set in the test
+			token:            "",
+			expectedStatus:   http.StatusUnauthorized,
+			expectedResynced: 0,
+		},
+		{
+			name:             "resync another user's batch",
+			batchID:          "", // will set in the test
+			token:            token2,
+			expectedStatus:   http.StatusForbidden,
+			expectedResynced: 0,
+		},
+		{
+			name:             "resync batch with only failed jobs",
+			batchID:          "", // will set in the test
+			jobs:             []models.JobStatus{models.JobStatusFailed, models.JobStatusFailed},
+			token:            token,
+			expectedStatus:   http.StatusOK,
+			expectedResynced: 2,
+		},
+		{
+			name:             "resync batch with only pending jobs",
+			batchID:          "", // will set in the test
+			jobs:             []models.JobStatus{models.JobStatusPending, models.JobStatusPending},
+			token:            token,
+			expectedStatus:   http.StatusOK,
+			expectedResynced: 2,
+		},
+		{
+			name:             "resync batch with not_found jobs",
+			batchID:          "", // will set in the test
+			jobs:             []models.JobStatus{models.JobStatusNotFound, models.JobStatusNotFound},
+			token:            token,
+			expectedStatus:   http.StatusOK,
+			expectedResynced: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// If we are testing a batch that exists, create one
+			if tt.batchID == "" && tt.name != "resync non-existent batch" && tt.name != "resync without authentication" {
+				batch := createTestBatch(t, database, userID, "Resync Batch", "https://open.spotify.com/track/123", "track")
+				tt.batchID = batch.ID
+
+				// Create jobs for the batch with the specified statuses
+				for _, status := range tt.jobs {
+					createTestJob(t, database, batch.ID, userID, status)
+				}
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/batches/"+tt.batchID+"/resync", nil)
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+
+			// Set context with user ID for authenticated requests (except unauthorized which we skip the context)
+			if tt.expectedStatus != http.StatusUnauthorized {
+				ctx := context.WithValue(req.Context(), middleware.UserIDKey, userID)
+				req = req.WithContext(ctx)
+			}
+
+			w := httptest.NewRecorder()
+			handler.ResyncBatch(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedStatus == http.StatusOK {
+				var response map[string]interface{}
+				err := json.Unmarshal(w.Body.Bytes(), &response)
+				assert.NoError(t, err)
+				assert.Equal(t, float64(tt.expectedResynced), response["resynced_count"])
+				assert.Equal(t, string(models.BatchStatusProcessing), response["batch_status"])
+			}
+		})
+	}
 }

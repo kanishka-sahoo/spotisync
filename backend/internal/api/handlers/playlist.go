@@ -177,6 +177,15 @@ func (h *PlaylistHandler) CreatePlaylistFromBatch(w http.ResponseWriter, r *http
 		h.hub.BroadcastPlaylistUpdate(userID, batchID, "completed", result.PlaylistID, "", result.TracksFound, result.TracksFailed, result.TracksFound+result.TracksFailed)
 	}
 
+	// Update jobs that were successfully added to the playlist
+	for _, trackResult := range result.TrackResults {
+		if trackResult.Found {
+			if err := h.db.UpdateJobInPlaylist(trackResult.JobID, true); err != nil {
+				log.Printf("[playlist] failed to update in_playlist for job %s: %v", trackResult.JobID, err)
+			}
+		}
+	}
+
 	// Build response message
 	message := "playlist created successfully"
 	if result.TracksFailed > 0 {

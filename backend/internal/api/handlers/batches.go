@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"spotisync/internal/api/middleware"
 	"spotisync/internal/auth"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // GetIDFromRoute extracts the ID parameter from chi route context, path value, or URL path
@@ -293,5 +295,105 @@ func (h *BatchesHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":       "batch retry queued",
 		"retried_count": retriedCount,
+	})
+}
+
+// ResyncBatch handles POST /api/v1/batches/:id/resync
+func (h *BatchesHandler) ResyncBatch(w http.ResponseWriter, r *http.Request) {
+	// Get the authenticated user ID from JWT claims by validating the token
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := h.jwtManager.ValidateToken(parts[1])
+	if err != nil {
+		http.Error(w, "invalid token: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+	authUserID := claims.UserID
+
+	// Get the requested user ID from context
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Verify the authenticated user matches the requested user
+	if authUserID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	batchID := GetIDFromRoute(r)
+	if batchID == "" {
+		http.Error(w, "batch ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate batch ID is a valid UUID format
+	if _, err := uuid.Parse(batchID); err != nil {
+		http.Error(w, "invalid batch ID format", http.StatusBadRequest)
+		return
+	}
+
+	batch, err := h.db.GetBatchByID(batchID)
+	if err != nil {
+		http.Error(w, "failed to get batch: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if batch == nil {
+		http.Error(w, "batch not found", http.StatusNotFound)
+		return
+	}
+
+	// Ensure user owns the batch
+	if batch.UserID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Get all incomplete jobs in the batch
+	jobs, err := h.db.GetIncompleteJobsByBatchID(batchID)
+	if err != nil {
+		http.Error(w, "failed to get incomplete jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Reset and enqueue each incomplete job
+	resyncedCount := 0
+	for _, job := range jobs {
+		// CRITICAL: Verify job ownership before resetting and enqueueing
+		if job.UserID != userID {
+			log.Printf("SECURITY VIOLATION: User %d attempted to resync job %s belonging to user %d", userID, job.ID, job.UserID)
+			continue // Skip jobs that don't belong to the user
+		}
+		if err := h.db.ResetJobForRetry(job.ID); err != nil {
+			continue // Skip jobs that fail to reset
+		}
+		h.scheduler.Enqueue(job.ID, userID)
+		resyncedCount++
+	}
+
+	// Update batch status to processing using atomic update
+	// Only update if the batch is still in a state that can be resynced
+	if err := h.db.UpdateBatchStatusIfMatching(batchID, models.BatchStatusProcessing, batch.CompletedJobs, batch.FailedJobs, batch.Status); err != nil {
+		http.Error(w, "failed to update batch status: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":        "batch resync queued",
+		"resynced_count": resyncedCount,
+		"batch_status":   models.BatchStatusProcessing,
 	})
 }

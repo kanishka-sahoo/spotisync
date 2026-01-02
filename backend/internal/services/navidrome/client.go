@@ -603,42 +603,21 @@ func (c *Client) CreatePlaylistWithDetails(ctx context.Context, playlistName str
 			Found:      false,
 		}
 
-		// Try ISRC search first
-		var track *Track
-		var err error
-		searchMethod := ""
-
-		if job.ISRC != "" {
-			track, err = c.SearchTrackByISRC(ctx, job.ISRC)
-			if err != nil {
-				log.Printf("[navidrome] ISRC search failed for %s (%s): %v", job.TrackName, job.ISRC, err)
-			} else {
-				searchMethod = "isrc"
-			}
-		}
-
-		// Fall back to title/artist search if ISRC didn't work
-		if track == nil && err == nil {
-			track, err = c.SearchTrackByTitle(ctx, job.TrackName, job.ArtistName)
-			if err != nil {
-				log.Printf("[navidrome] title/artist search failed for %s (%s): %v", job.TrackName, job.ArtistName, err)
-			} else {
-				searchMethod = "title"
-			}
-		}
-
-		if track != nil {
-			searchResult.TrackID = track.ID
-			searchResult.Found = true
-			searchResult.SearchMethod = searchMethod
-			foundTrackIDs = append(foundTrackIDs, track.ID)
-			tracksFound++
-			log.Printf("[navidrome] found track '%s' by '%s' (ID: %s, method: %s)", job.TrackName, job.ArtistName, track.ID, searchMethod)
-		} else {
+		// Only use title/artist search
+		track, err := c.SearchTrackByTitle(ctx, job.TrackName, job.ArtistName)
+		if err != nil {
+			log.Printf("[navidrome] title/artist search failed for %s (%s): %v", job.TrackName, job.ArtistName, err)
 			searchResult.Error = err.Error()
-			searchResult.SearchMethod = searchMethod
+			searchResult.SearchMethod = "title"
 			tracksFailed++
 			log.Printf("[navidrome] could not find track '%s' by '%s': %v", job.TrackName, job.ArtistName, err)
+		} else {
+			searchResult.TrackID = track.ID
+			searchResult.Found = true
+			searchResult.SearchMethod = "title"
+			foundTrackIDs = append(foundTrackIDs, track.ID)
+			tracksFound++
+			log.Printf("[navidrome] found track '%s' by '%s' (ID: %s, method: title)", job.TrackName, job.ArtistName, track.ID)
 		}
 
 		result.TrackResults = append(result.TrackResults, searchResult)

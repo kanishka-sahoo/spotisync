@@ -8,7 +8,7 @@ import { Progress } from '@/components/ui/progress'
 import { useBatch, useRetryBatch, useRetryJob } from '@/hooks/useJobs'
 import { Job, PlaylistStatus } from '@/lib/types'
 import { formatDistanceToNow } from 'date-fns'
-import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle, ExternalLink, ListMusic } from 'lucide-react'
 import Link from 'next/link'
 import { useToast } from '@/hooks/useToast'
 
@@ -248,6 +248,9 @@ export default function BatchDetailPage() {
                     Details
                   </th>
                   <th className="p-4 text-left text-sm font-medium text-gray-400">
+                    Playlist
+                  </th>
+                  <th className="p-4 text-left text-sm font-medium text-gray-400">
                     Actions
                   </th>
                 </tr>
@@ -291,9 +294,18 @@ export default function BatchDetailPage() {
                           <Progress value={job.progress} className="h-2 w-16" />
                           <span className="text-xs text-gray-400">{job.progress}%</span>
                         </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {batch.playlist_status === 'completed' && (
+                          job.in_playlist ? (
+                            <ListMusic className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )
+                        )}
+                      </td>
+                      <td className="p-4">
                       {job.status === 'failed' && (
                         <Button
                           variant="ghost"

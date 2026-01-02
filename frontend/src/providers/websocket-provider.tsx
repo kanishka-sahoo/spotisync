@@ -23,8 +23,8 @@ interface WebSocketPayload {
 }
 
 interface WebSocketMessage {
-  type: 'job_update' | 'batch_update' | 'error'
-  payload: WebSocketPayload
+  type: 'job_update' | 'batch_update' | 'playlist_update' | 'error'
+  payload: WebSocketPayload | PlaylistUpdatePayload
 }
 
 const WebSocketContext = createContext<WebSocketContextType>({ isConnected: false })
@@ -116,7 +116,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         const message: WebSocketMessage = JSON.parse(event.data)
         
         if (message.type === 'job_update' && message.payload) {
-          const payload = message.payload
+          const payload = message.payload as WebSocketPayload
           const jobId = payload.job_id || payload.id
           if (jobId) {
             updateJob(jobId, {
