@@ -129,6 +129,10 @@ export const batchApi = {
     const response = await api.post(`/api/v1/batches/${id}/retry`);
     return response.data;
   },
+  resync: async (id: string) => {
+    const response = await api.post(`/api/v1/batches/${id}/resync`);
+    return response.data;
+  },
 };
 
 export const navidromeApi = {

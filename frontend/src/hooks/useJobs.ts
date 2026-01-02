@@ -66,6 +66,21 @@ export function useRetryBatch() {
   })
 }
 
+export function useResyncBatch() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const response = await batchApi.resync(id)
+      return response
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['batch'] })
+      queryClient.invalidateQueries({ queryKey: ['batches'] })
+    },
+  })
+}
+
 export function useRetryJob() {
   const queryClient = useQueryClient()
 

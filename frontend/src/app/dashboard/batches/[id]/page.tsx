@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { useBatch, useRetryBatch, useRetryJob } from '@/hooks/useJobs'
+import { useBatch, useRetryBatch, useResyncBatch, useRetryJob } from '@/hooks/useJobs'
 import { Job, PlaylistStatus } from '@/lib/types'
 import { formatDistanceToNow } from 'date-fns'
 import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle, ExternalLink, ListMusic } from 'lucide-react'
@@ -102,6 +102,7 @@ export default function BatchDetailPage() {
   const { data: batch, isLoading: batchLoading } = useBatch(batchId)
   const retryBatch = useRetryBatch()
   const retryJob = useRetryJob()
+  const resyncBatch = useResyncBatch()
 
   if (batchLoading) {
     return <div className="text-white">Loading...</div>
@@ -170,58 +171,72 @@ export default function BatchDetailPage() {
             </div>
           </CardContent>
         </Card>
-        {batch.spotify_type === 'playlist' && (
-          <Card className="border-gray-700 bg-gray-900">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
-                <Music className="h-4 w-4" />
-                Navidrome Playlist
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <Badge variant={getPlaylistStatusBadgeVariant(batch.playlist_status)}>
-                    {batch.playlist_status || 'pending'}
-                  </Badge>
-                  {batch.playlist_status === 'creating' && (
-                    <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
-                  )}
-                </div>
-                <p className="text-sm text-gray-400">{getPlaylistStatusMessage(batch)}</p>
-                {(batch.tracks_found !== undefined || batch.tracks_failed !== undefined) && (
-                  <div className="flex items-center gap-4 text-sm">
-                    <span className="text-green-500">
-                      {batch.tracks_found || 0} tracks found
-                    </span>
-                    <span className="text-red-500">
-                      {batch.tracks_failed || 0} not found
-                    </span>
-                  </div>
-                )}
-                {batch.playlist_id && (
-                  <div>
-                    {isValidHttpUrl(batch.playlist_id) ? (
-                      <a
-                        href={batch.playlist_id}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
-                      >
-                        Open in Navidrome <ExternalLink className="h-3 w-3" />
-                      </a>
-                    ) : (
-                      <span className="text-sm text-gray-400">
-                        {batch.playlist_id}
-                      </span>
-                    )}
-                  </div>
+      </div>
+
+      {batch.spotify_type === 'playlist' && (
+        <Card className="border-gray-700 bg-gray-900">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+              <Music className="h-4 w-4" />
+              Navidrome Playlist
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Badge variant={getPlaylistStatusBadgeVariant(batch.playlist_status)}>
+                  {batch.playlist_status || 'pending'}
+                </Badge>
+                {batch.playlist_status === 'creating' && (
+                  <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
                 )}
               </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+              <p className="text-sm text-gray-400">{getPlaylistStatusMessage(batch)}</p>
+              {(batch.tracks_found !== undefined || batch.tracks_failed !== undefined) && (
+                <div className="flex items-center gap-4 text-sm">
+                  <span className="text-green-500">
+                    {batch.tracks_found || 0} tracks found
+                  </span>
+                  <span className="text-red-500">
+                    {batch.tracks_failed || 0} not found
+                  </span>
+                </div>
+              )}
+              {batch.playlist_id && (
+                <div>
+                  {isValidHttpUrl(batch.playlist_id) ? (
+                    <a
+                      href={batch.playlist_id}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
+                    >
+                      Open in Navidrome <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ) : (
+                    <span className="text-sm text-gray-400">
+                      {batch.playlist_id}
+                    </span>
+                  )}
+                </div>
+              )}
+              {batch.playlist_status === 'completed' && (
+                <div className="mt-4 pt-4 border-t border-gray-700">
+                  <Button
+                    onClick={() => resyncBatch.mutate(batch.id)}
+                    disabled={resyncBatch.isPending}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${resyncBatch.isPending ? 'animate-spin' : ''}`} />
+                    {resyncBatch.isPending ? 'Resyncing...' : 'Resync Playlist'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="border-gray-700 bg-gray-900">
         <CardHeader>
