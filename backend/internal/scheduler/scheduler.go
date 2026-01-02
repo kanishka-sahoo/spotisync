@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -509,52 +510,23 @@ func (s *JobScheduler) createNavidromePlaylist(client *navidrome.Client, batch *
 	log.Printf("[scheduler] Creating Navidrome playlist for batch %s: %s", batch.ID, batch.Name)
 	ctx := context.Background()
 
-	// Collect Navidrome track IDs for completed jobs, maintaining order
-	var navidromeTrackIDs []string
-	tracksTotal := 0
-	tracksFound := 0
-
-	// Jobs should already be in order from the database (ordered by track_number or creation order)
+	// Calculate total completed/skipped jobs (these are the ones we can include)
+	var completedJobs []*models.Job
 	for _, job := range jobs {
-		// Only process completed/skipped jobs (successful downloads)
-		if job.Status != models.JobStatusCompleted && job.Status != models.JobStatusSkipped {
-			continue
-		}
-		tracksTotal++
-
-		// Try to find the track in Navidrome
-		var track *navidrome.Track
-		var searchErr error
-
-		// First try by ISRC if available
-		if job.ISRC != "" {
-			track, searchErr = client.SearchTrackByISRC(ctx, job.ISRC)
-			if searchErr != nil {
-				log.Printf("[scheduler] ISRC search failed for %s: %v, trying title/artist", job.ISRC, searchErr)
-			}
-		}
-
-		// Fall back to title/artist search if ISRC search failed or ISRC not available
-		if track == nil {
-			track, searchErr = client.SearchTrackByTitle(ctx, job.TrackName, job.ArtistName)
-			if searchErr != nil {
-				log.Printf("[scheduler] Title/artist search failed for '%s - %s': %v", job.ArtistName, job.TrackName, searchErr)
-				continue
-			}
-		}
-
-		if track != nil {
-			navidromeTrackIDs = append(navidromeTrackIDs, track.ID)
-			tracksFound++
-			log.Printf("[scheduler] Found track in Navidrome: %s - %s (ID: %s)", track.Artist, track.Title, track.ID)
+		if job.Status == models.JobStatusCompleted || job.Status == models.JobStatusSkipped {
+			completedJobs = append(completedJobs, job)
 		}
 	}
+	tracksTotal := len(completedJobs)
 
-	// Check if we found any tracks
-	if len(navidromeTrackIDs) == 0 {
-		log.Printf("[scheduler] No matching tracks found in Navidrome for batch %s", batch.ID)
-		return
+	// Send initial notification
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistUpdate(batch.UserID, batch.ID, "searching", "",
+			fmt.Sprintf("Searching for %d tracks in Navidrome...", tracksTotal), 0, tracksTotal, tracksTotal)
 	}
+
+	// Update database status
+	s.db.UpdateBatchPlaylistStatus(batch.ID, models.PlaylistStatusCreating, "", "Searching for tracks...", 0, 0)
 
 	// Determine playlist name
 	playlistName := batch.Name
@@ -562,21 +534,30 @@ func (s *JobScheduler) createNavidromePlaylist(client *navidrome.Client, batch *
 		playlistName = "Spotisync Playlist"
 	}
 
-	// Create or update the playlist in Navidrome
-	playlistID, err := client.CreateOrUpdatePlaylist(ctx, playlistName, navidromeTrackIDs)
-	if err != nil {
-		log.Printf("[scheduler] Failed to create Navidrome playlist for batch %s: %v", batch.ID, err)
-		return
+	// Call the new method to create playlist with detailed results
+	result := client.CreatePlaylistWithDetails(ctx, playlistName, completedJobs)
+
+	// Update database with results
+	if result.Success {
+		s.db.UpdateBatchPlaylistStatus(batch.ID, models.PlaylistStatusCompleted, result.PlaylistID,
+			fmt.Sprintf("Playlist created with %d/%d tracks", result.TracksFound, result.TotalTracks),
+			result.TracksFound, result.TracksFailed)
+	} else {
+		s.db.UpdateBatchPlaylistStatus(batch.ID, models.PlaylistStatusFailed, "",
+			"Failed to create playlist: "+result.Error, 0, 0)
 	}
 
-	log.Printf("[scheduler] Created/updated Navidrome playlist '%s' (ID: %s) with %d/%d tracks for batch %s",
-		playlistName, playlistID, tracksFound, tracksTotal, batch.ID)
+	// Send final notification
+	status := "completed"
+	message := fmt.Sprintf("Playlist created with %d/%d tracks", result.TracksFound, result.TotalTracks)
+	if !result.Success {
+		status = "failed"
+		message = "Failed to create playlist: " + result.Error
+	}
 
-	// Send WebSocket notification about playlist creation
 	if s.hub != nil {
-		// We could add a new WebSocket message type for playlist creation
-		// For now, just log it
-		log.Printf("[scheduler] Playlist '%s' ready in Navidrome", playlistName)
+		s.hub.BroadcastPlaylistUpdate(batch.UserID, batch.ID, status, result.PlaylistID,
+			message, result.TracksFound, result.TracksFailed, result.TotalTracks)
 	}
 }
 

@@ -321,6 +321,26 @@ func (h *Hub) BroadcastBatchUpdate(userID int64, batchID string, completedJobs, 
 	h.BroadcastToUser(userID, msg)
 }
 
+// BroadcastPlaylistUpdate sends a playlist update to the appropriate user
+func (h *Hub) BroadcastPlaylistUpdate(userID int64, batchID string, status string, playlistID string, message string, tracksFound int, tracksFailed int, totalTracks int) {
+	data := map[string]interface{}{
+		"type": "playlist_update",
+		"payload": map[string]interface{}{
+			"batch_id":      batchID,
+			"status":        status,
+			"playlist_id":   playlistID,
+			"message":       message,
+			"tracks_found":  tracksFound,
+			"tracks_failed": tracksFailed,
+			"total_tracks":  totalTracks,
+			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+
+	msg, _ := json.Marshal(data)
+	h.BroadcastToUser(userID, msg)
+}
+
 // readPump pumps messages from the websocket connection to the hub
 func (c *Client) readPump() {
 	defer func() {

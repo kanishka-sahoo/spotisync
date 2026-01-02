@@ -137,9 +137,12 @@ database:
 }
 
 func TestLoadFileNotFound(t *testing.T) {
+	// When config file doesn't exist, Load falls back to environment variables
+	// and sets Env to "production" by default, so validation fails with missing secret_key
 	_, err := Load("/nonexistent/config.yaml")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read config file")
+	// The error should contain the validation failure message
+	assert.Contains(t, err.Error(), "secret_key is required in production mode")
 }
 
 func TestLoadInvalidYAML(t *testing.T) {

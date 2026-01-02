@@ -141,7 +141,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		r.Post("/api/v1/scan", handlers.NewScanHandler(database, cfg).TriggerScan)
 
 		// Playlist routes
-		r.Post("/api/v1/batches/{id}/playlist", handlers.NewPlaylistHandler(database, jwtManager, cfg).CreatePlaylistFromBatch)
+		r.Post("/api/v1/batches/{id}/playlist", handlers.NewPlaylistHandler(database, jwtManager, cfg, hub).CreatePlaylistFromBatch)
 
 		// WebSocket endpoint
 		r.Get("/api/v1/ws", func(w http.ResponseWriter, req *http.Request) {

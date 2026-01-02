@@ -82,6 +82,11 @@ func (d *Database) migrate() error {
 			completed_jobs INTEGER DEFAULT 0,
 			failed_jobs INTEGER DEFAULT 0,
 			status TEXT DEFAULT 'pending',
+			playlist_status TEXT DEFAULT 'pending',
+			playlist_id TEXT,
+			playlist_message TEXT,
+			tracks_found INTEGER DEFAULT 0,
+			tracks_failed INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id)
@@ -162,6 +167,13 @@ func (d *Database) migrate() error {
 	// Migrate existing databases: add artists columns for full artist metadata
 	_, _ = d.Exec("ALTER TABLE jobs ADD COLUMN artists TEXT")
 	_, _ = d.Exec("ALTER TABLE jobs ADD COLUMN album_artists TEXT")
+
+	// Migrate existing databases: add playlist columns to batches table
+	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN playlist_status TEXT DEFAULT 'pending'")
+	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN playlist_id TEXT")
+	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN playlist_message TEXT")
+	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN tracks_found INTEGER DEFAULT 0")
+	_, _ = d.Exec("ALTER TABLE batches ADD COLUMN tracks_failed INTEGER DEFAULT 0")
 
 	// Enable WAL mode for better concurrency
 	if _, err := d.Exec("PRAGMA journal_mode=WAL;"); err != nil {
@@ -315,13 +327,16 @@ func (d *Database) CreateBatch(batch *models.Batch) error {
 // GetBatchByID retrieves a batch by ID
 func (d *Database) GetBatchByID(id string) (*models.Batch, error) {
 	var batch models.Batch
+	var playlistID, playlistMessage sql.NullString
 	err := d.QueryRow(
 		`SELECT id, user_id, spotify_url, spotify_type, name, total_jobs, completed_jobs, failed_jobs, status,
+				playlist_status, playlist_id, playlist_message, tracks_found, tracks_failed,
 				created_at, updated_at
 		 FROM batches WHERE id = ?`,
 		id,
 	).Scan(&batch.ID, &batch.UserID, &batch.SpotifyURL, &batch.SpotifyType, &batch.Name, &batch.TotalJobs,
-		&batch.CompletedJobs, &batch.FailedJobs, &batch.Status, &batch.CreatedAt, &batch.UpdatedAt)
+		&batch.CompletedJobs, &batch.FailedJobs, &batch.Status, &batch.PlaylistStatus, &playlistID,
+		&playlistMessage, &batch.TracksFound, &batch.TracksFailed, &batch.CreatedAt, &batch.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -329,6 +344,15 @@ func (d *Database) GetBatchByID(id string) (*models.Batch, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Handle NULL values for nullable fields
+	if playlistID.Valid {
+		batch.PlaylistID = playlistID.String
+	}
+	if playlistMessage.Valid {
+		batch.PlaylistMessage = playlistMessage.String
+	}
+
 	return &batch, nil
 }
 
@@ -336,6 +360,7 @@ func (d *Database) GetBatchByID(id string) (*models.Batch, error) {
 func (d *Database) GetBatchesByUserID(userID int64) ([]*models.Batch, error) {
 	rows, err := d.Query(
 		`SELECT id, user_id, spotify_url, spotify_type, name, total_jobs, completed_jobs, failed_jobs, status,
+				playlist_status, playlist_id, playlist_message, tracks_found, tracks_failed,
 				created_at, updated_at
 		 FROM batches WHERE user_id = ? ORDER BY created_at DESC`,
 		userID,
@@ -348,9 +373,18 @@ func (d *Database) GetBatchesByUserID(userID int64) ([]*models.Batch, error) {
 	var batches []*models.Batch
 	for rows.Next() {
 		var batch models.Batch
+		var playlistID, playlistMessage sql.NullString
 		if err := rows.Scan(&batch.ID, &batch.UserID, &batch.SpotifyURL, &batch.SpotifyType, &batch.Name, &batch.TotalJobs,
-			&batch.CompletedJobs, &batch.FailedJobs, &batch.Status, &batch.CreatedAt, &batch.UpdatedAt); err != nil {
+			&batch.CompletedJobs, &batch.FailedJobs, &batch.Status, &batch.PlaylistStatus, &playlistID,
+			&playlistMessage, &batch.TracksFound, &batch.TracksFailed, &batch.CreatedAt, &batch.UpdatedAt); err != nil {
 			return nil, err
+		}
+		// Handle NULL values for nullable fields
+		if playlistID.Valid {
+			batch.PlaylistID = playlistID.String
+		}
+		if playlistMessage.Valid {
+			batch.PlaylistMessage = playlistMessage.String
 		}
 		batches = append(batches, &batch)
 	}
@@ -362,6 +396,15 @@ func (d *Database) UpdateBatchStatus(id string, status models.BatchStatus, compl
 	_, err := d.Exec(
 		`UPDATE batches SET status = ?, completed_jobs = ?, failed_jobs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		status, completedJobs, failedJobs, id,
+	)
+	return err
+}
+
+// UpdateBatchPlaylistStatus updates the playlist-related fields of a batch
+func (d *Database) UpdateBatchPlaylistStatus(id string, status models.PlaylistStatus, playlistID, message string, tracksFound, tracksFailed int) error {
+	_, err := d.Exec(
+		`UPDATE batches SET playlist_status = ?, playlist_id = ?, playlist_message = ?, tracks_found = ?, tracks_failed = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		status, playlistID, message, tracksFound, tracksFailed, id,
 	)
 	return err
 }

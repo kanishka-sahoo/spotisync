@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"spotisync/internal/db/models"
 )
 
 const (
@@ -156,6 +158,29 @@ type PlaylistsData struct {
 type PlaylistDetail struct {
 	Playlist
 	Entry []Track `json:"entry,omitempty"`
+}
+
+// TrackSearchResult represents the result of searching for a single track
+type TrackSearchResult struct {
+	JobID        string // Original job ID
+	TrackName    string // Track title
+	ArtistName   string // Artist name
+	Found        bool   // Whether the track was found
+	TrackID      string // Navidrome track ID if found
+	SearchMethod string // "isrc" or "title" depending on what worked
+	Error        string // Error message if search failed
+}
+
+// PlaylistCreationResult represents the complete result of playlist creation
+type PlaylistCreationResult struct {
+	PlaylistID   string              // Navidrome playlist ID
+	PlaylistName string              // Playlist name
+	TotalTracks  int                 // Total tracks attempted
+	TracksFound  int                 // Number of tracks successfully added
+	TracksFailed int                 // Number of tracks that couldn't be found
+	TrackResults []TrackSearchResult // Detailed results for each track
+	Success      bool                // Whether playlist creation was successful
+	Error        string              // Error message if failed
 }
 
 // generateSalt creates a random salt for authentication
@@ -551,6 +576,91 @@ func (c *Client) CreateOrUpdatePlaylist(ctx context.Context, name string, songID
 	}
 
 	return playlistID, nil
+}
+
+// CreatePlaylistWithDetails creates or updates a playlist with detailed search results
+func (c *Client) CreatePlaylistWithDetails(ctx context.Context, playlistName string, jobs []*models.Job) *PlaylistCreationResult {
+	result := &PlaylistCreationResult{
+		PlaylistName: playlistName,
+		TotalTracks:  len(jobs),
+		TrackResults: make([]TrackSearchResult, 0, len(jobs)),
+	}
+
+	if len(jobs) == 0 {
+		result.Success = true
+		return result
+	}
+
+	foundTrackIDs := make([]string, 0, len(jobs))
+	tracksFound := 0
+	tracksFailed := 0
+
+	for _, job := range jobs {
+		searchResult := TrackSearchResult{
+			JobID:      job.ID,
+			TrackName:  job.TrackName,
+			ArtistName: job.ArtistName,
+			Found:      false,
+		}
+
+		// Try ISRC search first
+		var track *Track
+		var err error
+		searchMethod := ""
+
+		if job.ISRC != "" {
+			track, err = c.SearchTrackByISRC(ctx, job.ISRC)
+			if err != nil {
+				log.Printf("[navidrome] ISRC search failed for %s (%s): %v", job.TrackName, job.ISRC, err)
+			} else {
+				searchMethod = "isrc"
+			}
+		}
+
+		// Fall back to title/artist search if ISRC didn't work
+		if track == nil && err == nil {
+			track, err = c.SearchTrackByTitle(ctx, job.TrackName, job.ArtistName)
+			if err != nil {
+				log.Printf("[navidrome] title/artist search failed for %s (%s): %v", job.TrackName, job.ArtistName, err)
+			} else {
+				searchMethod = "title"
+			}
+		}
+
+		if track != nil {
+			searchResult.TrackID = track.ID
+			searchResult.Found = true
+			searchResult.SearchMethod = searchMethod
+			foundTrackIDs = append(foundTrackIDs, track.ID)
+			tracksFound++
+			log.Printf("[navidrome] found track '%s' by '%s' (ID: %s, method: %s)", job.TrackName, job.ArtistName, track.ID, searchMethod)
+		} else {
+			searchResult.Error = err.Error()
+			searchResult.SearchMethod = searchMethod
+			tracksFailed++
+			log.Printf("[navidrome] could not find track '%s' by '%s': %v", job.TrackName, job.ArtistName, err)
+		}
+
+		result.TrackResults = append(result.TrackResults, searchResult)
+	}
+
+	result.TracksFound = tracksFound
+	result.TracksFailed = tracksFailed
+
+	// Create or update the playlist with found tracks
+	playlistID, err := c.CreateOrUpdatePlaylist(ctx, playlistName, foundTrackIDs)
+	if err != nil {
+		result.Error = err.Error()
+		result.Success = false
+		return result
+	}
+
+	result.PlaylistID = playlistID
+	result.Success = true
+
+	log.Printf("[navidrome] created/updated playlist '%s' (ID: %s) with %d/%d tracks", playlistName, playlistID, tracksFound, len(jobs))
+
+	return result
 }
 
 // WaitForScanComplete waits for an ongoing scan to complete, with timeout

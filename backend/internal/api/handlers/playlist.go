@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"spotisync/internal/api/middleware"
@@ -10,6 +11,7 @@ import (
 	"spotisync/internal/db"
 	"spotisync/internal/db/models"
 	"spotisync/internal/services/navidrome"
+	"spotisync/internal/websocket"
 )
 
 // PlaylistCreateRequest represents a request to create a playlist from a batch
@@ -23,7 +25,7 @@ type PlaylistCreateResponse struct {
 	PlaylistID   string `json:"playlist_id"`
 	PlaylistName string `json:"playlist_name"`
 	TracksFound  int    `json:"tracks_found"`
-	TracksTotal  int    `json:"tracks_total"`
+	TracksFailed int    `json:"tracks_failed"`
 	Message      string `json:"message"`
 }
 
@@ -32,14 +34,16 @@ type PlaylistHandler struct {
 	db         *db.Database
 	jwtManager *auth.JWTManager
 	cfg        *config.Config
+	hub        *websocket.Hub
 }
 
 // NewPlaylistHandler creates a new playlist handler
-func NewPlaylistHandler(database *db.Database, jwtManager *auth.JWTManager, cfg *config.Config) *PlaylistHandler {
+func NewPlaylistHandler(database *db.Database, jwtManager *auth.JWTManager, cfg *config.Config, hub *websocket.Hub) *PlaylistHandler {
 	return &PlaylistHandler{
 		db:         database,
 		jwtManager: jwtManager,
 		cfg:        cfg,
+		hub:        hub,
 	}
 }
 
@@ -131,76 +135,60 @@ func (h *PlaylistHandler) CreatePlaylistFromBatch(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Prepare completed jobs for the new method
+	var completedJobs []*models.Job
+	for i := range jobs {
+		job := jobs[i]
+		if job.Status == models.JobStatusCompleted {
+			completedJobs = append(completedJobs, job)
+		}
+	}
+
+	if len(completedJobs) == 0 {
+		http.Error(w, "no completed jobs to create playlist", http.StatusBadRequest)
+		return
+	}
+
 	// Create Navidrome client
 	client := navidrome.NewClient(user.NavidromeURL, user.NavidromeUsername, user.NavidromePassword)
 
-	// Collect Navidrome track IDs for completed jobs
-	var navidromeTrackIDs []string
-	tracksTotal := 0
-	tracksFound := 0
-
-	for _, job := range jobs {
-		// Only process completed jobs
-		if job.Status != models.JobStatusCompleted {
-			continue
+	// Create playlist using the new method
+	result := client.CreatePlaylistWithDetails(r.Context(), playlistName, completedJobs)
+	if result.Error != "" {
+		// Update batch playlist status to failed
+		if err := h.db.UpdateBatchPlaylistStatus(batchID, models.PlaylistStatusFailed, "", result.Error, result.TracksFound, result.TracksFailed); err != nil {
+			log.Printf("[playlist] failed to update batch playlist status: %v", err)
 		}
-		tracksTotal++
-
-		// Try to find the track in Navidrome
-		var track *navidrome.Track
-		var searchErr error
-
-		// First try by ISRC if available
-		if job.ISRC != "" {
-			track, searchErr = client.SearchTrackByISRC(r.Context(), job.ISRC)
-			if searchErr != nil {
-				log.Printf("[playlist] ISRC search failed for %s: %v, trying title/artist", job.ISRC, searchErr)
-			}
+		// Send WebSocket notification for failure
+		if h.hub != nil {
+			h.hub.BroadcastPlaylistUpdate(userID, batchID, "failed", "", result.Error, result.TracksFound, result.TracksFailed, result.TracksFound+result.TracksFailed)
 		}
-
-		// Fall back to title/artist search if ISRC search failed or ISRC not available
-		if track == nil {
-			track, searchErr = client.SearchTrackByTitle(r.Context(), job.TrackName, job.ArtistName)
-			if searchErr != nil {
-				log.Printf("[playlist] title/artist search failed for '%s - %s': %v", job.ArtistName, job.TrackName, searchErr)
-				continue
-			}
-		}
-
-		if track != nil {
-			navidromeTrackIDs = append(navidromeTrackIDs, track.ID)
-			tracksFound++
-			log.Printf("[playlist] found track in Navidrome: %s - %s (ID: %s)", track.Artist, track.Title, track.ID)
-		}
-	}
-
-	// Check if we found any tracks
-	if len(navidromeTrackIDs) == 0 {
-		http.Error(w, "no matching tracks found in Navidrome. Make sure Navidrome has scanned the downloaded files.", http.StatusNotFound)
+		http.Error(w, "failed to create playlist: "+result.Error, http.StatusInternalServerError)
 		return
 	}
 
-	// Create or update the playlist in Navidrome
-	playlistID, err := client.CreateOrUpdatePlaylist(r.Context(), playlistName, navidromeTrackIDs)
-	if err != nil {
-		http.Error(w, "failed to create playlist in Navidrome: "+err.Error(), http.StatusBadGateway)
-		return
+	// Update batch playlist status to completed with the playlist ID
+	if err := h.db.UpdateBatchPlaylistStatus(batchID, models.PlaylistStatusCompleted, result.PlaylistID, "", result.TracksFound, result.TracksFailed); err != nil {
+		log.Printf("[playlist] failed to update batch playlist status: %v", err)
 	}
 
-	log.Printf("[playlist] created/updated Navidrome playlist '%s' (ID: %s) with %d/%d tracks", playlistName, playlistID, tracksFound, tracksTotal)
+	// Send WebSocket notification for success
+	if h.hub != nil {
+		h.hub.BroadcastPlaylistUpdate(userID, batchID, "completed", result.PlaylistID, "", result.TracksFound, result.TracksFailed, result.TracksFound+result.TracksFailed)
+	}
 
 	// Build response message
 	message := "playlist created successfully"
-	if tracksFound < tracksTotal {
-		message = "playlist created with partial tracks. Some tracks could not be found in Navidrome."
+	if result.TracksFailed > 0 {
+		message = fmt.Sprintf("playlist created with %d tracks found and %d tracks failed", result.TracksFound, result.TracksFailed)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(PlaylistCreateResponse{
-		PlaylistID:   playlistID,
+		PlaylistID:   result.PlaylistID,
 		PlaylistName: playlistName,
-		TracksFound:  tracksFound,
-		TracksTotal:  tracksTotal,
+		TracksFound:  result.TracksFound,
+		TracksFailed: result.TracksFailed,
 		Message:      message,
 	})
 }

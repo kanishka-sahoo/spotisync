@@ -6,10 +6,22 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { useBatch, useRetryBatch, useRetryJob } from '@/hooks/useJobs'
-import { Job } from '@/lib/types'
+import { Job, PlaylistStatus } from '@/lib/types'
 import { formatDistanceToNow } from 'date-fns'
-import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle } from 'lucide-react'
+import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle, ExternalLink } from 'lucide-react'
 import Link from 'next/link'
+import { useToast } from '@/hooks/useToast'
+
+// Validation function to check if URL is safe
+function isValidHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    // Only allow http/https protocols
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function getStatusIcon(status: string) {
   switch (status) {
@@ -51,6 +63,37 @@ function getStatusBadgeVariant(status: string): 'success' | 'destructive' | 'sec
     default:
       return 'secondary'
   }
+}
+
+function getPlaylistStatusBadgeVariant(status?: PlaylistStatus): 'success' | 'destructive' | 'secondary' | 'default' | 'warning' {
+  switch (status) {
+    case 'completed':
+      return 'success'
+    case 'failed':
+      return 'destructive'
+    case 'creating':
+      return 'warning'
+    default:
+      return 'secondary'
+  }
+}
+
+function getPlaylistStatusMessage(batch: { playlist_status?: PlaylistStatus, playlist_message?: string, tracks_found?: number, tracks_failed?: number }): string {
+  if (!batch.playlist_status || batch.playlist_status === 'pending') {
+    return 'Playlist creation will begin automatically when all downloads complete.'
+  }
+  if (batch.playlist_status === 'creating') {
+    return batch.playlist_message || 'Searching for tracks in Navidrome...'
+  }
+  if (batch.playlist_status === 'completed') {
+    const found = batch.tracks_found || 0
+    const failed = batch.tracks_failed || 0
+    return `Playlist created with ${found} tracks found and ${failed} tracks not found in Navidrome.`
+  }
+  if (batch.playlist_status === 'failed') {
+    return batch.playlist_message || 'Failed to create playlist in Navidrome.'
+  }
+  return ''
 }
 
 export default function BatchDetailPage() {
@@ -127,6 +170,57 @@ export default function BatchDetailPage() {
             </div>
           </CardContent>
         </Card>
+        {batch.spotify_type === 'playlist' && (
+          <Card className="border-gray-700 bg-gray-900">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+                <Music className="h-4 w-4" />
+                Navidrome Playlist
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Badge variant={getPlaylistStatusBadgeVariant(batch.playlist_status)}>
+                    {batch.playlist_status || 'pending'}
+                  </Badge>
+                  {batch.playlist_status === 'creating' && (
+                    <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
+                  )}
+                </div>
+                <p className="text-sm text-gray-400">{getPlaylistStatusMessage(batch)}</p>
+                {(batch.tracks_found !== undefined || batch.tracks_failed !== undefined) && (
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="text-green-500">
+                      {batch.tracks_found || 0} tracks found
+                    </span>
+                    <span className="text-red-500">
+                      {batch.tracks_failed || 0} not found
+                    </span>
+                  </div>
+                )}
+                {batch.playlist_id && (
+                  <div>
+                    {isValidHttpUrl(batch.playlist_id) ? (
+                      <a
+                        href={batch.playlist_id}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
+                      >
+                        Open in Navidrome <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : (
+                      <span className="text-sm text-gray-400">
+                        {batch.playlist_id}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Card className="border-gray-700 bg-gray-900">

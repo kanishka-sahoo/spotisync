@@ -35,10 +35,16 @@ export interface Batch {
   created_at: string;
   updated_at: string;
   jobs?: Job[];
+  playlist_status?: PlaylistStatus;
+  playlist_id?: string;
+  playlist_message?: string;
+  tracks_found?: number;
+  tracks_failed?: number;
 }
 
 export type BatchStatus = 'pending' | 'processing' | 'completed' | 'failed';
 export type SpotifyType = 'album' | 'playlist' | 'track' | 'artist';
+export type PlaylistStatus = 'pending' | 'creating' | 'completed' | 'failed';
 
 export interface Track {
   id: string;
@@ -118,7 +124,18 @@ export interface WebSocketPayload {
   [key: string]: unknown;
 }
 
+export interface PlaylistUpdatePayload {
+  batch_id: string;
+  status: PlaylistStatus;
+  playlist_id?: string;
+  message?: string;
+  tracks_found?: number;
+  tracks_failed?: number;
+  total_tracks?: number;
+  timestamp?: string;
+}
+
 export interface WebSocketMessage {
-  type: 'job_update' | 'batch_update' | 'error';
-  payload: WebSocketPayload;
+  type: 'job_update' | 'batch_update' | 'playlist_update' | 'error';
+  payload: WebSocketPayload | PlaylistUpdatePayload;
 }

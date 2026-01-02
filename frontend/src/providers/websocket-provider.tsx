@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react'
 import { useJobStore } from '@/stores/useJobStore'
 import { useQueryClient } from '@tanstack/react-query'
-import { Job, JobStatus } from '@/lib/types'
+import { Job, JobStatus, PlaylistUpdatePayload } from '@/lib/types'
 import { getConfig, getWsUrl as getWsUrlFromConfig } from '@/lib/config'
 
 interface WebSocketContextType {
@@ -138,6 +138,15 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           if (message.payload.batch_id) {
             queryClient.invalidateQueries({ queryKey: ['batch', message.payload.batch_id] })
           }
+          queryClient.invalidateQueries({ queryKey: ['batches'] })
+        } else if (message.type === 'playlist_update') {
+          console.log('[WebSocket] Playlist update:', message.payload)
+          const payload = message.payload as PlaylistUpdatePayload
+          // Invalidate batch queries to update the UI with new playlist status
+          if (payload.batch_id) {
+            queryClient.invalidateQueries({ queryKey: ['batch', payload.batch_id] })
+          }
+          // Also invalidate batches list to show playlist status changes
           queryClient.invalidateQueries({ queryKey: ['batches'] })
         } else if (message.type === 'error') {
           console.error('[WebSocket] Server error:', message.payload)
