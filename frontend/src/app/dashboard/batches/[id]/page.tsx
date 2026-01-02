@@ -220,16 +220,22 @@ export default function BatchDetailPage() {
                   )}
                 </div>
               )}
-              {batch.playlist_status === 'completed' && (
+              {(batch.status === 'completed' || batch.completed_jobs > 0) && (
                 <div className="mt-4 pt-4 border-t border-gray-700">
                   <Button
                     onClick={() => resyncBatch.mutate(batch.id)}
-                    disabled={resyncBatch.isPending}
+                    disabled={resyncBatch.isPending || batch.playlist_status === 'creating'}
                     variant="outline"
                     size="sm"
                   >
                     <RefreshCw className={`mr-2 h-4 w-4 ${resyncBatch.isPending ? 'animate-spin' : ''}`} />
-                    {resyncBatch.isPending ? 'Resyncing...' : 'Resync Playlist'}
+                    {resyncBatch.isPending 
+                      ? 'Processing...' 
+                      : batch.playlist_status === 'creating'
+                      ? 'Creating...'
+                      : batch.playlist_status === 'completed'
+                      ? 'Resync Playlist'
+                      : 'Create Playlist'}
                   </Button>
                 </div>
               )}
