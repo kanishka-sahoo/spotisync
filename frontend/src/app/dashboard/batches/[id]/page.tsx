@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -106,8 +106,108 @@ export default function BatchDetailPage() {
   const [checkResult, setCheckResult] = useState<string | null>(null)
   const { toast } = useToast()
 
+  // Progress tracking state for Check Playlist
+  const [isCheckingPlaylist, setIsCheckingPlaylist] = useState(false)
+  const [checkProgress, setCheckProgress] = useState(0)
+  const [checkProgressMessage, setCheckProgressMessage] = useState('')
+  const checkTimeoutsRef = useRef<NodeJS.Timeout[]>([])
+
+  // Progress tracking state for Sync Playlist
+  const [isSyncingPlaylist, setIsSyncingPlaylist] = useState(false)
+  const [syncProgress, setSyncProgress] = useState(0)
+  const [syncProgressMessage, setSyncProgressMessage] = useState('')
+  const syncTimeoutsRef = useRef<NodeJS.Timeout[]>([])
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      checkTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+      syncTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+    }
+  }, [])
+
+  // Handler for Check Playlist button
+  const handleCheckPlaylist = () => {
+    if (!batch) return
+
+    // Clear any existing timeouts
+    checkTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+    checkTimeoutsRef.current = []
+
+    // Reset and start progress
+    setIsCheckingPlaylist(true)
+    setCheckProgress(0)
+    setCheckProgressMessage('Connecting to Navidrome...')
+
+    // Simulate progress updates
+    const timeout1 = setTimeout(() => {
+      setCheckProgress(30)
+      setCheckProgressMessage('Searching for playlist...')
+    }, 500)
+    checkTimeoutsRef.current.push(timeout1)
+
+    const timeout2 = setTimeout(() => {
+      setCheckProgress(60)
+      setCheckProgressMessage('Verifying playlist...')
+    }, 2000)
+    checkTimeoutsRef.current.push(timeout2)
+
+    const timeout3 = setTimeout(() => {
+      setCheckProgress(90)
+      setCheckProgressMessage('Finalizing...')
+    }, 4000)
+    checkTimeoutsRef.current.push(timeout3)
+
+    // Trigger the mutation
+    checkPlaylist.mutate(batch.id)
+  }
+
+  // Handler for Sync Playlist button
+  const handleSyncPlaylist = () => {
+    if (!batch) return
+
+    // Clear any existing timeouts
+    syncTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+    syncTimeoutsRef.current = []
+
+    // Reset and start progress
+    setIsSyncingPlaylist(true)
+    setSyncProgress(0)
+    setSyncProgressMessage('Initializing sync...')
+
+    // Simulate progress updates
+    const timeout1 = setTimeout(() => {
+      setSyncProgress(30)
+      setSyncProgressMessage('Matching tracks...')
+    }, 500)
+    syncTimeoutsRef.current.push(timeout1)
+
+    const timeout2 = setTimeout(() => {
+      setSyncProgress(60)
+      setSyncProgressMessage('Creating playlist...')
+    }, 2000)
+    syncTimeoutsRef.current.push(timeout2)
+
+    const timeout3 = setTimeout(() => {
+      setSyncProgress(90)
+      setSyncProgressMessage('Finalizing...')
+    }, 4000)
+    syncTimeoutsRef.current.push(timeout3)
+
+    // Trigger the mutation
+    syncPlaylist.mutate(batch.id)
+  }
+
   const checkPlaylist = useCheckPlaylist({
     onSuccess: (data) => {
+      // Clear any pending timeouts
+      checkTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+      checkTimeoutsRef.current = []
+
+      // Set to 100% complete
+      setCheckProgress(100)
+      setCheckProgressMessage('Complete!')
+
       if (data && data.found) {
         setCheckResult('Playlist found in Navidrome')
         toast({
@@ -123,31 +223,77 @@ export default function BatchDetailPage() {
           variant: 'destructive'
         })
       }
+
+      // Reset after 1 second
+      setTimeout(() => {
+        setIsCheckingPlaylist(false)
+        setCheckProgress(0)
+        setCheckProgressMessage('')
+      }, 1000)
     },
     onError: () => {
+      // Clear any pending timeouts
+      checkTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+      checkTimeoutsRef.current = []
+
+      setCheckProgressMessage('Error occurred')
       setCheckResult('Error checking playlist')
       toast({
         title: 'Error',
         description: 'Failed to check playlist',
         variant: 'destructive'
       })
+
+      // Reset after 2 seconds
+      setTimeout(() => {
+        setIsCheckingPlaylist(false)
+        setCheckProgress(0)
+        setCheckProgressMessage('')
+      }, 2000)
     }
   })
 
   const syncPlaylist = useSyncPlaylist({
     onSuccess: () => {
+      // Clear any pending timeouts
+      syncTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+      syncTimeoutsRef.current = []
+
+      // Set to 100% complete
+      setSyncProgress(100)
+      setSyncProgressMessage('Complete!')
+
       toast({
         title: 'Success',
         description: 'Playlist synced successfully',
         variant: 'success'
       })
+
+      // Reset after 1 second
+      setTimeout(() => {
+        setIsSyncingPlaylist(false)
+        setSyncProgress(0)
+        setSyncProgressMessage('')
+      }, 1000)
     },
     onError: () => {
+      // Clear any pending timeouts
+      syncTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+      syncTimeoutsRef.current = []
+
+      setSyncProgressMessage('Error occurred')
       toast({
         title: 'Error',
         description: 'Failed to sync playlist',
         variant: 'destructive'
       })
+
+      // Reset after 2 seconds
+      setTimeout(() => {
+        setIsSyncingPlaylist(false)
+        setSyncProgress(0)
+        setSyncProgressMessage('')
+      }, 2000)
     }
   })
 
@@ -272,30 +418,54 @@ export default function BatchDetailPage() {
                 </div>
               )}
                {(batch.status === 'completed' || batch.completed_jobs > 0) && (
-                <div className="mt-4 pt-4 border-t border-gray-700 flex flex-col sm:flex-row gap-2">
-                  { (batch.playlist_status === 'pending' || batch.playlist_status === 'failed') && (
-                    <Button
-                      onClick={() => checkPlaylist.mutate(batch.id)}
-                      disabled={checkPlaylist.isPending}
-                      variant="outline"
-                      size="sm"
-                      className="w-full sm:w-auto min-h-[44px]"
-                    >
-                      <Search className="mr-2 h-4 w-4" />
-                      {checkPlaylist.isPending ? 'Checking...' : 'Check Playlist'}
-                    </Button>
+                <div className="mt-4 pt-4 border-t border-gray-700">
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    { (batch.playlist_status === 'pending' || batch.playlist_status === 'failed') && (
+                      <Button
+                        onClick={handleCheckPlaylist}
+                        disabled={isCheckingPlaylist || isSyncingPlaylist}
+                        variant="outline"
+                        size="sm"
+                        className="w-full sm:w-auto min-h-[44px]"
+                      >
+                        <Search className={`mr-2 h-4 w-4 ${isCheckingPlaylist ? 'animate-spin' : ''}`} />
+                        {isCheckingPlaylist ? 'Checking...' : 'Check Playlist'}
+                      </Button>
+                    )}
+                    { (batch.status === 'completed' || batch.completed_jobs > 0) && (
+                      <Button
+                        onClick={handleSyncPlaylist}
+                        disabled={isCheckingPlaylist || isSyncingPlaylist}
+                        variant="outline"
+                        size="sm"
+                        className="w-full sm:w-auto min-h-[44px]"
+                      >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${isSyncingPlaylist ? 'animate-spin' : ''}`} />
+                        {isSyncingPlaylist ? 'Syncing...' : 'Sync Playlist'}
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Progress indicator for Check Playlist */}
+                  {isCheckingPlaylist && (
+                    <div className="mt-4 space-y-2">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between text-sm">
+                        <span className="text-gray-400 break-words">{checkProgressMessage}</span>
+                        <span className="text-gray-400 font-medium">{checkProgress}%</span>
+                      </div>
+                      <Progress value={checkProgress} className="h-2" />
+                    </div>
                   )}
-                  { (batch.status === 'completed' || batch.completed_jobs > 0) && (
-                    <Button
-                      onClick={() => syncPlaylist.mutate(batch.id)}
-                      disabled={syncPlaylist.isPending}
-                      variant="outline"
-                      size="sm"
-                      className="w-full sm:w-auto min-h-[44px]"
-                    >
-                      <RefreshCw className={`mr-2 h-4 w-4 ${syncPlaylist.isPending ? 'animate-spin' : ''}`} />
-                      {syncPlaylist.isPending ? 'Syncing...' : 'Sync Playlist'}
-                    </Button>
+
+                  {/* Progress indicator for Sync Playlist */}
+                  {isSyncingPlaylist && (
+                    <div className="mt-4 space-y-2">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between text-sm">
+                        <span className="text-gray-400 break-words">{syncProgressMessage}</span>
+                        <span className="text-gray-400 font-medium">{syncProgress}%</span>
+                      </div>
+                      <Progress value={syncProgress} className="h-2" />
+                    </div>
                   )}
                 </div>
               )}
