@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"spotisync/internal/scheduler"
 	"spotisync/internal/services/navidrome"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -440,8 +442,16 @@ func (h *BatchesHandler) CheckPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create a background context with longer timeout for playlist operations
+	// Large playlists (60+ tracks) can take several minutes to check
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Pass userID through the new context since we're not using r.Context()
+	ctx = context.WithValue(ctx, middleware.UserIDKey, userID)
+
 	// Use the playlist syncer to check if playlist exists
-	playlist, err := h.playlistSyncer.CheckPlaylist(r.Context(), batchID)
+	playlist, err := h.playlistSyncer.CheckPlaylist(ctx, batchID)
 	if err != nil {
 		log.Printf("Error checking playlist: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -515,8 +525,17 @@ func (h *BatchesHandler) SyncPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create a background context with longer timeout for long-running sync operations
+	// Large playlists (60+ tracks) can take several minutes to process
+	// Each track requires API calls for searching and then adding to playlist
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	// Pass userID through the new context since we're not using r.Context()
+	ctx = context.WithValue(ctx, middleware.UserIDKey, userID)
+
 	// Use the playlist syncer to sync the playlist
-	result, err := h.playlistSyncer.SyncPlaylist(r.Context(), batchID)
+	result, err := h.playlistSyncer.SyncPlaylist(ctx, batchID)
 	if err != nil {
 		log.Printf("Error syncing playlist: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
