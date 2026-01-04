@@ -35,17 +35,19 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-white">Dashboard</h1>
+    <div className="space-y-4 sm:space-y-6">
+      {/* Header with responsive title and button */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <h1 className="text-2xl sm:text-3xl font-bold text-white">Dashboard</h1>
         <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-spotify-green hover:bg-spotify-green/90 text-black">
+            <Button className="bg-spotify-green hover:bg-spotify-green/90 text-black w-full sm:w-auto min-h-[44px]">
               <Plus className="mr-2 h-4 w-4" />
-              New Sync
+              <span className="hidden xs:inline">New Sync</span>
+              <span className="xs:hidden">Sync</span>
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-[500px]">
+          <DialogContent className="w-[95vw] max-w-[500px] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create New Sync Batch</DialogTitle>
             </DialogHeader>
@@ -58,7 +60,8 @@ export default function DashboardPage() {
         </Dialog>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {/* Stats cards - responsive grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Card className="border-gray-700 bg-gray-900">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-gray-400">
@@ -105,25 +108,26 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* Recent batches list - responsive layout */}
       <Card className="border-gray-700 bg-gray-900">
         <CardHeader>
           <CardTitle className="text-white">Recent Batches</CardTitle>
         </CardHeader>
         <CardContent>
           {recentBatches.length === 0 ? (
-            <div className="text-center text-gray-400 py-8">
+            <div className="text-center text-gray-400 py-8 text-sm">
               No batches yet. Create your first sync batch to get started.
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3 sm:space-y-4">
               {recentBatches.map((batch: Batch) => (
                 <div
                   key={batch.id}
-                  className="flex items-center justify-between rounded-lg border border-gray-700 p-4"
+                  className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 rounded-lg border border-gray-700 p-3 sm:p-4"
                 >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-white">{batch.name}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-white truncate">{batch.name}</span>
                       <Badge
                         variant={
                           batch.status === 'completed'
@@ -136,7 +140,7 @@ export default function DashboardPage() {
                         {batch.status}
                       </Badge>
                     </div>
-                    <div className="mt-2 flex items-center gap-4 text-sm text-gray-400">
+                    <div className="mt-2 flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-400 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Clock className="h-4 w-4" />
                         {new Date(batch.created_at).toLocaleDateString()}
@@ -146,7 +150,7 @@ export default function DashboardPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="w-32">
+                  <div className="w-full sm:w-32">
                     <Progress value={batch.total_jobs > 0 ? Math.round((batch.completed_jobs / batch.total_jobs) * 100) : 0} className="h-2" />
                     <div className="mt-1 text-right text-xs text-gray-400">
                       {batch.total_jobs > 0 ? Math.round((batch.completed_jobs / batch.total_jobs) * 100) : 0}%

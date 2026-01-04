@@ -140,29 +140,33 @@ export default function BatchDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      {/* Header - responsive layout */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
         <Link href="/dashboard/batches">
-          <Button variant="ghost" size="sm">
+          <Button variant="ghost" size="sm" className="min-h-[44px] w-full sm:w-auto">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Batches
           </Button>
         </Link>
-        <h1 className="text-3xl font-bold text-white">{batch.name}</h1>
-        <Badge
-          variant={
-            batch.status === 'completed'
-              ? 'success'
-              : batch.status === 'failed'
-              ? 'destructive'
-              : 'secondary'
-          }
-        >
-          {batch.status}
-        </Badge>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white break-words">{batch.name}</h1>
+          <Badge
+            variant={
+              batch.status === 'completed'
+                ? 'success'
+                : batch.status === 'failed'
+                ? 'destructive'
+                : 'secondary'
+            }
+          >
+            {batch.status}
+          </Badge>
+        </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      {/* Stats cards - responsive grid */}
+      <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
         <Card className="border-gray-700 bg-gray-900">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-gray-400">
@@ -247,14 +251,15 @@ export default function BatchDetailPage() {
                   )}
                 </div>
               )}
-              {(batch.status === 'completed' || batch.completed_jobs > 0) && (
-                <div className="mt-4 pt-4 border-t border-gray-700 flex gap-2">
+               {(batch.status === 'completed' || batch.completed_jobs > 0) && (
+                <div className="mt-4 pt-4 border-t border-gray-700 flex flex-col sm:flex-row gap-2">
                   { (batch.playlist_status === 'pending' || batch.playlist_status === 'failed') && (
                     <Button
                       onClick={() => checkPlaylist.mutate(batch.id)}
                       disabled={checkPlaylist.isPending}
                       variant="outline"
                       size="sm"
+                      className="w-full sm:w-auto min-h-[44px]"
                     >
                       <Search className="mr-2 h-4 w-4" />
                       {checkPlaylist.isPending ? 'Checking...' : 'Check Playlist'}
@@ -266,6 +271,7 @@ export default function BatchDetailPage() {
                       disabled={syncPlaylist.isPending}
                       variant="outline"
                       size="sm"
+                      className="w-full sm:w-auto min-h-[44px]"
                     >
                       <RefreshCw className={`mr-2 h-4 w-4 ${syncPlaylist.isPending ? 'animate-spin' : ''}`} />
                       {syncPlaylist.isPending ? 'Syncing...' : 'Sync Playlist'}
@@ -279,12 +285,14 @@ export default function BatchDetailPage() {
         </Card>
       )}
 
+      {/* Jobs table - responsive with horizontal scroll on mobile */}
       <Card className="border-gray-700 bg-gray-900">
         <CardHeader>
           <CardTitle className="text-white">Jobs ({batch.jobs?.length || 0})</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border border-gray-700">
+          {/* Desktop table view */}
+          <div className="hidden lg:block rounded-md border border-gray-700 overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-800">
@@ -378,6 +386,75 @@ export default function BatchDetailPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Mobile card view */}
+          <div className="lg:hidden space-y-3">
+            {batch.jobs?.map((job: Job) => (
+              <div
+                key={job.id}
+                className="rounded-lg border border-gray-700 p-3 space-y-3"
+              >
+                {/* Status and action row */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {getStatusIcon(job.status)}
+                    <Badge variant={getStatusBadgeVariant(job.status)}>
+                      {job.status}
+                    </Badge>
+                  </div>
+                  {job.status === 'failed' && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-11 w-11"
+                      onClick={() => retryJob.mutate(job.id)}
+                      disabled={retryJob.isPending}
+                      aria-label="Retry job"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+
+                {/* Track info */}
+                <div className="space-y-1">
+                  <div className="text-white font-medium text-sm">{job.track_name || 'N/A'}</div>
+                  <div className="text-gray-400 text-xs">{job.artist_name || 'N/A'}</div>
+                  <div className="text-gray-500 text-xs">{job.album_name || 'N/A'}</div>
+                </div>
+
+                {/* Details row */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {/* Song status */}
+                    <div className="flex items-center gap-1" title={`Song: ${job.song_status || 'pending'}`}>
+                      <Music className="h-4 w-4 text-gray-400" />
+                      {getGranularStatusIcon(job.song_status)}
+                    </div>
+                    {/* Lyrics status */}
+                    <div className="flex items-center gap-1" title={`Lyrics: ${job.lyrics_status || 'pending'}`}>
+                      <FileText className="h-4 w-4 text-gray-400" />
+                      {getGranularStatusIcon(job.lyrics_status)}
+                    </div>
+                    {/* Cover status */}
+                    <div className="flex items-center gap-1" title={`Cover: ${job.cover_status || 'pending'}`}>
+                      <Image className="h-4 w-4 text-gray-400" />
+                      {getGranularStatusIcon(job.cover_status)}
+                    </div>
+                    {batch.playlist_status === 'completed' && job.in_playlist && (
+                      <ListMusic className="h-4 w-4 text-green-500" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="flex items-center gap-2">
+                  <Progress value={job.progress} className="h-2 flex-1" />
+                  <span className="text-xs text-gray-400 min-w-[3rem] text-right">{job.progress}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
 
@@ -386,6 +463,7 @@ export default function BatchDetailPage() {
           <Button
             onClick={() => retryBatch.mutate(batch.id)}
             disabled={retryBatch.isPending}
+            className="w-full sm:w-auto min-h-[44px]"
           >
             <RefreshCw className="mr-2 h-4 w-4" />
             Retry Batch

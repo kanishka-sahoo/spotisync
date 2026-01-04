@@ -397,8 +397,8 @@ export default function SettingsPage() {
   )
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-white">Settings</h1>
+    <div className="space-y-4 sm:space-y-6">
+      <h1 className="text-2xl sm:text-3xl font-bold text-white">Settings</h1>
 
       <Card className="border-gray-700 bg-gray-900">
         <CardHeader>
@@ -449,11 +449,12 @@ export default function SettingsPage() {
             />
           </div>
 
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
             <Button
               variant="outline"
               onClick={handleTestConnection}
               disabled={testConnectionMutation.isPending || isLoadingSettings}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Network className="mr-2 h-4 w-4" />
               {testConnectionMutation.isPending ? 'Testing...' : 'Test Connection'}
@@ -461,6 +462,7 @@ export default function SettingsPage() {
             <Button
               onClick={handleSave}
               disabled={saveConfigMutation.isPending || isLoadingSettings}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Save className="mr-2 h-4 w-4" />
               {saveConfigMutation.isPending ? 'Saving...' : 'Save'}
@@ -501,9 +503,11 @@ export default function SettingsPage() {
             <Button
               onClick={handleSaveStorage}
               disabled={saveStorageMutation.isPending || isLoadingStorage}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Save className="mr-2 h-4 w-4" />
-              {saveStorageMutation.isPending ? 'Saving...' : 'Save Storage Settings'}
+              <span className="hidden sm:inline">{saveStorageMutation.isPending ? 'Saving...' : 'Save Storage Settings'}</span>
+              <span className="sm:hidden">{saveStorageMutation.isPending ? 'Saving...' : 'Save'}</span>
             </Button>
           </div>
         </CardContent>
@@ -580,11 +584,12 @@ export default function SettingsPage() {
             </select>
           </div>
 
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
             <Button
               variant="outline"
               onClick={handleTestTidal}
               disabled={testTidalMutation.isPending || isLoadingSourceSettings || !sourceSettings?.tidal?.configured}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Network className="mr-2 h-4 w-4" />
               {testTidalMutation.isPending ? 'Testing...' : 'Test Connection'}
@@ -592,6 +597,7 @@ export default function SettingsPage() {
             <Button
               onClick={handleSaveTidal}
               disabled={saveTidalMutation.isPending || isLoadingSourceSettings}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Save className="mr-2 h-4 w-4" />
               {saveTidalMutation.isPending ? 'Saving...' : 'Save'}
@@ -671,11 +677,12 @@ export default function SettingsPage() {
             </select>
           </div>
 
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
             <Button
               variant="outline"
               onClick={handleTestQobuz}
               disabled={testQobuzMutation.isPending || isLoadingSourceSettings || !sourceSettings?.qobuz?.configured}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Network className="mr-2 h-4 w-4" />
               {testQobuzMutation.isPending ? 'Testing...' : 'Test Connection'}
@@ -683,6 +690,7 @@ export default function SettingsPage() {
             <Button
               onClick={handleSaveQobuz}
               disabled={saveQobuzMutation.isPending || isLoadingSourceSettings}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Save className="mr-2 h-4 w-4" />
               {saveQobuzMutation.isPending ? 'Saving...' : 'Save'}
@@ -702,8 +710,8 @@ export default function SettingsPage() {
         <CardContent className="space-y-4">
           <div className="space-y-3">
             <Label className="text-gray-300">Preferred Source</Label>
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+              <label className="flex items-center gap-2 cursor-pointer min-h-[44px]">
                 <input
                   type="radio"
                   name="preferredSource"
@@ -718,7 +726,7 @@ export default function SettingsPage() {
                   Tidal
                 </span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer min-h-[44px]">
                 <input
                   type="radio"
                   name="preferredSource"
@@ -743,9 +751,11 @@ export default function SettingsPage() {
             <Button
               onClick={handleSavePreferredSource}
               disabled={savePreferredSourceMutation.isPending || isLoadingSourceSettings}
+              className="w-full sm:w-auto min-h-[44px]"
             >
               <Save className="mr-2 h-4 w-4" />
-              {savePreferredSourceMutation.isPending ? 'Saving...' : 'Save Preference'}
+              <span className="hidden sm:inline">{savePreferredSourceMutation.isPending ? 'Saving...' : 'Save Preference'}</span>
+              <span className="sm:hidden">{savePreferredSourceMutation.isPending ? 'Saving...' : 'Save'}</span>
             </Button>
           </div>
         </CardContent>
