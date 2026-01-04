@@ -1,14 +1,15 @@
 'use client'
 
+import { useState } from 'react'
 import { useParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { useBatch, useRetryBatch, useResyncBatch, useRetryJob } from '@/hooks/useJobs'
+import { useBatch, useRetryBatch, useCheckPlaylist, useSyncPlaylist, useRetryJob } from '@/hooks/useJobs'
 import { Job, PlaylistStatus } from '@/lib/types'
 import { formatDistanceToNow } from 'date-fns'
-import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle, ExternalLink, ListMusic } from 'lucide-react'
+import { ArrowLeft, Clock, CheckCircle, XCircle, RefreshCw, Music, FileText, Image, MinusCircle, ExternalLink, ListMusic, Search } from 'lucide-react'
 import Link from 'next/link'
 import { useToast } from '@/hooks/useToast'
 
@@ -102,7 +103,33 @@ export default function BatchDetailPage() {
   const { data: batch, isLoading: batchLoading } = useBatch(batchId)
   const retryBatch = useRetryBatch()
   const retryJob = useRetryJob()
-  const resyncBatch = useResyncBatch()
+  const [checkResult, setCheckResult] = useState<string | null>(null)
+  const { toast } = useToast()
+
+  const checkPlaylist = useCheckPlaylist({
+    onSuccess: (data) => {
+      if (data && data.found) {
+        setCheckResult('Playlist found in Navidrome')
+        toast.success('Playlist found in Navidrome')
+      } else {
+        setCheckResult('Playlist not found in Navidrome')
+        toast.warning('Playlist not found in Navidrome')
+      }
+    },
+    onError: () => {
+      setCheckResult('Error checking playlist')
+      toast.error('Failed to check playlist')
+    }
+  })
+
+  const syncPlaylist = useSyncPlaylist({
+    onSuccess: () => {
+      toast.success('Playlist synced successfully')
+    },
+    onError: () => {
+      toast.error('Failed to sync playlist')
+    }
+  })
 
   if (batchLoading) {
     return <div className="text-white">Loading...</div>
@@ -221,24 +248,32 @@ export default function BatchDetailPage() {
                 </div>
               )}
               {(batch.status === 'completed' || batch.completed_jobs > 0) && (
-                <div className="mt-4 pt-4 border-t border-gray-700">
-                  <Button
-                    onClick={() => resyncBatch.mutate(batch.id)}
-                    disabled={resyncBatch.isPending || batch.playlist_status === 'creating'}
-                    variant="outline"
-                    size="sm"
-                  >
-                    <RefreshCw className={`mr-2 h-4 w-4 ${resyncBatch.isPending ? 'animate-spin' : ''}`} />
-                    {resyncBatch.isPending 
-                      ? 'Processing...' 
-                      : batch.playlist_status === 'creating'
-                      ? 'Creating...'
-                      : batch.playlist_status === 'completed'
-                      ? 'Resync Playlist'
-                      : 'Create Playlist'}
-                  </Button>
+                <div className="mt-4 pt-4 border-t border-gray-700 flex gap-2">
+                  { (batch.playlist_status === 'pending' || batch.playlist_status === 'failed') && (
+                    <Button
+                      onClick={() => checkPlaylist.mutate(batch.id)}
+                      disabled={checkPlaylist.isPending}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <Search className="mr-2 h-4 w-4" />
+                      {checkPlaylist.isPending ? 'Checking...' : 'Check Playlist'}
+                    </Button>
+                  )}
+                  { (batch.status === 'completed' || batch.completed_jobs > 0) && (
+                    <Button
+                      onClick={() => syncPlaylist.mutate(batch.id)}
+                      disabled={syncPlaylist.isPending}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${syncPlaylist.isPending ? 'animate-spin' : ''}`} />
+                      {syncPlaylist.isPending ? 'Syncing...' : 'Sync Playlist'}
+                    </Button>
+                  )}
                 </div>
               )}
+              {checkResult && <p className="text-sm text-gray-400 mt-2">{checkResult}</p>}
             </div>
           </CardContent>
         </Card>

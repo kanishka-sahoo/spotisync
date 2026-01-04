@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"spotisync/internal/api/middleware"
@@ -9,6 +10,7 @@ import (
 	"spotisync/internal/db"
 	"spotisync/internal/db/models"
 	"spotisync/internal/scheduler"
+	"spotisync/internal/services/navidrome"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -77,17 +79,19 @@ func GetIDFromRoute(r *http.Request) string {
 
 // BatchesHandler handles batch-related endpoints
 type BatchesHandler struct {
-	db         *db.Database
-	jwtManager *auth.JWTManager
-	scheduler  *scheduler.JobScheduler
+	db             *db.Database
+	jwtManager     *auth.JWTManager
+	scheduler      *scheduler.JobScheduler
+	playlistSyncer *navidrome.Syncer
 }
 
 // NewBatchesHandler creates a new batches handler
-func NewBatchesHandler(database *db.Database, jwtManager *auth.JWTManager, jobScheduler *scheduler.JobScheduler) *BatchesHandler {
+func NewBatchesHandler(database *db.Database, jwtManager *auth.JWTManager, jobScheduler *scheduler.JobScheduler, playlistSyncer *navidrome.Syncer) *BatchesHandler {
 	return &BatchesHandler{
-		db:         database,
-		jwtManager: jwtManager,
-		scheduler:  jobScheduler,
+		db:             database,
+		jwtManager:     jwtManager,
+		scheduler:      jobScheduler,
+		playlistSyncer: playlistSyncer,
 	}
 }
 
@@ -395,5 +399,142 @@ func (h *BatchesHandler) ResyncBatch(w http.ResponseWriter, r *http.Request) {
 		"message":        "batch resync queued",
 		"resynced_count": resyncedCount,
 		"batch_status":   models.BatchStatusProcessing,
+	})
+}
+
+// CheckPlaylist handles POST /api/v1/batches/{id}/check-playlist
+// Checks if a Navidrome playlist exists for the batch and marks it as completed if found
+func (h *BatchesHandler) CheckPlaylist(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	batchID := GetIDFromRoute(r)
+	if batchID == "" {
+		http.Error(w, "batch ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate batch ID is a valid UUID format
+	if _, err := uuid.Parse(batchID); err != nil {
+		http.Error(w, "invalid batch ID format", http.StatusBadRequest)
+		return
+	}
+
+	batch, err := h.db.GetBatchByID(batchID)
+	if err != nil {
+		log.Printf("Error getting batch: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if batch == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// Ensure user owns the batch
+	if batch.UserID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Use the playlist syncer to check if playlist exists
+	playlist, err := h.playlistSyncer.CheckPlaylist(r.Context(), batchID)
+	if err != nil {
+		log.Printf("Error checking playlist: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// If playlist is found, return its details
+	if playlist != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"playlist_id":   playlist.ID,
+			"playlist_name": playlist.Name,
+			"song_count":    playlist.SongCount,
+			"duration":      playlist.Duration,
+			"found":         true,
+			"message":       fmt.Sprintf("Found playlist '%s' with %d tracks", playlist.Name, playlist.SongCount),
+		})
+		return
+	}
+
+	// Playlist not found
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"found":   false,
+		"message": "No matching playlist found in Navidrome",
+	})
+}
+
+// SyncPlaylist handles POST /api/v1/batches/{id}/sync-playlist
+// Syncs the batch's completed jobs to a Navidrome playlist
+func (h *BatchesHandler) SyncPlaylist(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	batchID := GetIDFromRoute(r)
+	if batchID == "" {
+		http.Error(w, "batch ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate batch ID is a valid UUID format
+	if _, err := uuid.Parse(batchID); err != nil {
+		http.Error(w, "invalid batch ID format", http.StatusBadRequest)
+		return
+	}
+
+	batch, err := h.db.GetBatchByID(batchID)
+	if err != nil {
+		log.Printf("Error getting batch: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if batch == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// Ensure user owns the batch
+	if batch.UserID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Validate batch is a playlist type
+	if batch.SpotifyType != models.SpotifyTypePlaylist {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Use the playlist syncer to sync the playlist
+	result, err := h.playlistSyncer.SyncPlaylist(r.Context(), batchID)
+	if err != nil {
+		log.Printf("Error syncing playlist: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Return the sync result
+	w.Header().Set("Content-Type", "application/json")
+	status := http.StatusOK
+	if !result.Success {
+		status = http.StatusInternalServerError
+	}
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"playlist_id":   result.PlaylistID,
+		"tracks_found":  result.TracksFound,
+		"tracks_failed": result.TracksFailed,
+		"success":       result.Success,
+		"error":         result.Error,
 	})
 }

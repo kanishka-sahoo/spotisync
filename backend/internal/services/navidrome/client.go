@@ -546,6 +546,11 @@ func (c *Client) FindPlaylistByName(ctx context.Context, name string) (*Playlist
 	return nil, nil
 }
 
+// CheckPlaylist checks if a playlist exists by name and returns it if found
+func (c *Client) CheckPlaylist(ctx context.Context, name string) (*Playlist, error) {
+	return c.FindPlaylistByName(ctx, name)
+}
+
 // CreateOrUpdatePlaylist creates a new playlist or updates an existing one with the given songs
 func (c *Client) CreateOrUpdatePlaylist(ctx context.Context, name string, songIDs []string) (string, error) {
 	// Check if playlist already exists

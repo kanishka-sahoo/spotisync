@@ -108,6 +108,21 @@ export const authApi = {
   },
 };
 
+export interface PlaylistInfo {
+  id: string;
+  name: string;
+  songCount: number;
+  [key: string]: any;
+}
+
+export interface SyncPlaylistResult {
+  playlist_id: string;
+  tracks_found: number;
+  tracks_failed: number;
+  success: boolean;
+  error?: string;
+}
+
 export const batchApi = {
   getAll: async () => {
     const response = await api.get('/api/v1/batches');
@@ -131,6 +146,14 @@ export const batchApi = {
   },
   resync: async (id: string) => {
     const response = await api.post(`/api/v1/batches/${id}/resync`);
+    return response.data;
+  },
+  checkPlaylist: async (id: string): Promise<PlaylistInfo | {message: string}> => {
+    const response = await api.post(`/api/v1/batches/${id}/check-playlist`);
+    return response.data;
+  },
+  syncPlaylist: async (id: string): Promise<SyncPlaylistResult> => {
+    const response = await api.post(`/api/v1/batches/${id}/sync-playlist`);
     return response.data;
   },
 };

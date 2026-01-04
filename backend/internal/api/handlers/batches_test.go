@@ -18,6 +18,7 @@ import (
 	"spotisync/internal/db"
 	"spotisync/internal/db/models"
 	"spotisync/internal/scheduler"
+	"spotisync/internal/services/navidrome"
 )
 
 // setupBatchesTestDB creates an in-memory SQLite database for testing
@@ -47,7 +48,9 @@ func setupBatchesHandler(t *testing.T) (*handlers.BatchesHandler, *handlers.Jobs
 			Password: "test-client-secret",
 		},
 	}
-	batchesHandler := handlers.NewBatchesHandler(database, jwtManager, jobScheduler)
+	// Create a navidrome syncer for testing
+	playlistSyncer := navidrome.NewSyncer(database)
+	batchesHandler := handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer)
 	jobsHandler := handlers.NewJobsHandler(database, jobScheduler, jwtManager, cfg)
 	return batchesHandler, jobsHandler, database, jwtManager
 }

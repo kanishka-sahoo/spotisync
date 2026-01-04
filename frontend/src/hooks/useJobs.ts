@@ -81,6 +81,36 @@ export function useResyncBatch() {
   })
 }
 
+export function useCheckPlaylist() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const response = await batchApi.checkPlaylist(id)
+      return response
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['batch'] })
+      queryClient.invalidateQueries({ queryKey: ['batches'] })
+    },
+  })
+}
+
+export function useSyncPlaylist() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const response = await batchApi.syncPlaylist(id)
+      return response
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['batch'] })
+      queryClient.invalidateQueries({ queryKey: ['batches'] })
+    },
+  })
+}
+
 export function useRetryJob() {
   const queryClient = useQueryClient()
 

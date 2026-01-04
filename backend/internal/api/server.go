@@ -18,6 +18,7 @@ import (
 	"spotisync/internal/config"
 	"spotisync/internal/db"
 	"spotisync/internal/scheduler"
+	"spotisync/internal/services/navidrome"
 	"spotisync/internal/websocket"
 )
 
@@ -70,6 +71,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Initialize job scheduler with download orchestrator
 	jobScheduler := scheduler.NewJobSchedulerWithOrchestrator(database, cfg.Workers.Count, retryPolicy, cfg, hub)
 
+	// Initialize playlist syncer (creates per-user Navidrome clients at request time)
+	playlistSyncer := navidrome.NewSyncer(database)
+
 	// Initialize router
 	router := chi.NewRouter()
 
@@ -118,11 +122,13 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		r.Delete("/api/v1/jobs/{id}", handlers.NewJobsHandler(database, jobScheduler, jwtManager, cfg).CancelJob)
 
 		// Batches routes
-		r.Get("/api/v1/batches", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).ListBatches)
+		r.Get("/api/v1/batches", handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer).ListBatches)
 		r.Get("/api/v1/batches/{id}", handlers.NewJobsHandler(database, jobScheduler, jwtManager, cfg).GetBatchJobs)
-		r.Delete("/api/v1/batches/{id}", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).DeleteBatch)
-		r.Post("/api/v1/batches/{id}/retry", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).RetryBatch)
-		r.Post("/api/v1/batches/{id}/resync", handlers.NewBatchesHandler(database, jwtManager, jobScheduler).ResyncBatch)
+		r.Delete("/api/v1/batches/{id}", handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer).DeleteBatch)
+		r.Post("/api/v1/batches/{id}/retry", handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer).RetryBatch)
+		r.Post("/api/v1/batches/{id}/resync", handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer).ResyncBatch)
+		r.Post("/api/v1/batches/{id}/check-playlist", handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer).CheckPlaylist)
+		r.Post("/api/v1/batches/{id}/sync-playlist", handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer).SyncPlaylist)
 
 		// Settings routes
 		r.Get("/api/v1/settings", handlers.NewSettingsHandler(database, jwtManager, cfg).GetSettings)
