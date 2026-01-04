@@ -81,7 +81,10 @@ export function useResyncBatch() {
   })
 }
 
-export function useCheckPlaylist() {
+export function useCheckPlaylist(options?: {
+  onSuccess?: (data: any) => void
+  onError?: (error: any) => void
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -89,14 +92,21 @@ export function useCheckPlaylist() {
       const response = await batchApi.checkPlaylist(id)
       return response
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['batch'] })
       queryClient.invalidateQueries({ queryKey: ['batches'] })
+      options?.onSuccess?.(data)
+    },
+    onError: (error) => {
+      options?.onError?.(error)
     },
   })
 }
 
-export function useSyncPlaylist() {
+export function useSyncPlaylist(options?: {
+  onSuccess?: (data: any) => void
+  onError?: (error: any) => void
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -104,9 +114,13 @@ export function useSyncPlaylist() {
       const response = await batchApi.syncPlaylist(id)
       return response
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['batch'] })
       queryClient.invalidateQueries({ queryKey: ['batches'] })
+      options?.onSuccess?.(data)
+    },
+    onError: (error) => {
+      options?.onError?.(error)
     },
   })
 }

@@ -110,24 +110,44 @@ export default function BatchDetailPage() {
     onSuccess: (data) => {
       if (data && data.found) {
         setCheckResult('Playlist found in Navidrome')
-        toast.success('Playlist found in Navidrome')
+        toast({
+          title: 'Success',
+          description: 'Playlist found in Navidrome',
+          variant: 'success'
+        })
       } else {
         setCheckResult('Playlist not found in Navidrome')
-        toast.warning('Playlist not found in Navidrome')
+        toast({
+          title: 'Warning',
+          description: 'Playlist not found in Navidrome',
+          variant: 'destructive'
+        })
       }
     },
     onError: () => {
       setCheckResult('Error checking playlist')
-      toast.error('Failed to check playlist')
+      toast({
+        title: 'Error',
+        description: 'Failed to check playlist',
+        variant: 'destructive'
+      })
     }
   })
 
   const syncPlaylist = useSyncPlaylist({
     onSuccess: () => {
-      toast.success('Playlist synced successfully')
+      toast({
+        title: 'Success',
+        description: 'Playlist synced successfully',
+        variant: 'success'
+      })
     },
     onError: () => {
-      toast.error('Failed to sync playlist')
+      toast({
+        title: 'Error',
+        description: 'Failed to sync playlist',
+        variant: 'destructive'
+      })
     }
   })
 
