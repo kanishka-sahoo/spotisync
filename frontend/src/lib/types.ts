@@ -136,7 +136,17 @@ export interface PlaylistUpdatePayload {
   timestamp?: string;
 }
 
+export interface PlaylistProgressPayload {
+  batch_id: string;
+  operation: 'check' | 'sync';
+  progress: number; // 0-100
+  message: string;
+  current_track: number;
+  total_tracks: number;
+  timestamp: string;
+}
+
 export interface WebSocketMessage {
-  type: 'job_update' | 'batch_update' | 'playlist_update' | 'error';
-  payload: WebSocketPayload | PlaylistUpdatePayload;
+  type: 'job_update' | 'batch_update' | 'playlist_update' | 'playlist_progress' | 'error';
+  payload: WebSocketPayload | PlaylistUpdatePayload | PlaylistProgressPayload;
 }

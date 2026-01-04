@@ -12,13 +12,21 @@ import (
 
 // Syncer handles syncing playlists from Spotify to Navidrome
 type Syncer struct {
-	db *db.Database
+	db  *db.Database
+	hub interface {
+		BroadcastPlaylistProgress(userID int64, batchID string, operation string, progress int, message string, currentTrack int, totalTracks int)
+		BroadcastPlaylistUpdate(userID int64, batchID string, status string, playlistID string, message string, tracksFound int, tracksFailed int, totalTracks int)
+	}
 }
 
 // NewSyncer creates a new playlist syncer
-func NewSyncer(db *db.Database) *Syncer {
+func NewSyncer(db *db.Database, hub interface {
+	BroadcastPlaylistProgress(userID int64, batchID string, operation string, progress int, message string, currentTrack int, totalTracks int)
+	BroadcastPlaylistUpdate(userID int64, batchID string, status string, playlistID string, message string, tracksFound int, tracksFailed int, totalTracks int)
+}) *Syncer {
 	return &Syncer{
-		db: db,
+		db:  db,
+		hub: hub,
 	}
 }
 
@@ -45,6 +53,11 @@ func (s *Syncer) CheckPlaylist(ctx context.Context, batchID string) (*Playlist, 
 		return nil, fmt.Errorf("user not authenticated")
 	}
 
+	// Send initial progress
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "check", 0, "Connecting to Navidrome...", 0, 0)
+	}
+
 	// Get batch from database
 	batch, err := s.db.GetBatchByID(batchID)
 	if err != nil {
@@ -59,6 +72,11 @@ func (s *Syncer) CheckPlaylist(ctx context.Context, batchID string) (*Playlist, 
 		return nil, fmt.Errorf("batch does not belong to user")
 	}
 
+	// Progress: 30%
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "check", 30, "Fetching playlists...", 0, 0)
+	}
+
 	// Get client for user
 	client, err := s.getClientForUser(ctx, userID)
 	if err != nil {
@@ -70,6 +88,11 @@ func (s *Syncer) CheckPlaylist(ctx context.Context, batchID string) (*Playlist, 
 		return nil, fmt.Errorf("Navidrome is not configured for this user")
 	}
 
+	// Progress: 60%
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "check", 60, "Searching for playlist...", 0, 0)
+	}
+
 	// Check if playlist with batch name exists
 	playlist, err := client.CheckPlaylist(ctx, batch.Name)
 	if err != nil {
@@ -77,11 +100,26 @@ func (s *Syncer) CheckPlaylist(ctx context.Context, batchID string) (*Playlist, 
 		return nil, fmt.Errorf("failed to check playlist: %w", err)
 	}
 
+	// Progress: 90%
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "check", 90, "Verifying playlist...", 0, 0)
+	}
+
 	// If playlist is found, update the batch
 	if playlist != nil {
 		err = s.db.UpdateBatchPlaylistStatus(batchID, models.PlaylistStatusCompleted, playlist.ID, "", 0, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update batch: %w", err)
+		}
+
+		// Progress: 100%
+		if s.hub != nil {
+			s.hub.BroadcastPlaylistProgress(userID, batchID, "check", 100, fmt.Sprintf("Found playlist with %d tracks", playlist.SongCount), 0, 0)
+		}
+	} else {
+		// Progress: 100%
+		if s.hub != nil {
+			s.hub.BroadcastPlaylistProgress(userID, batchID, "check", 100, "Playlist not found", 0, 0)
 		}
 	}
 
@@ -94,6 +132,11 @@ func (s *Syncer) SyncPlaylist(ctx context.Context, batchID string) (*PlaylistCre
 	userID, ok := middleware.GetUserID(ctx)
 	if !ok {
 		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Send initial progress
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "sync", 0, "Initializing sync...", 0, 0)
 	}
 
 	// Get batch from database
@@ -115,6 +158,11 @@ func (s *Syncer) SyncPlaylist(ctx context.Context, batchID string) (*PlaylistCre
 		return nil, fmt.Errorf("batch is not a playlist type")
 	}
 
+	// Progress: 10%
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "sync", 10, "Loading jobs...", 0, 0)
+	}
+
 	// Get all jobs for the batch
 	jobs, err := s.db.GetJobsByBatchID(batchID)
 	if err != nil {
@@ -127,6 +175,13 @@ func (s *Syncer) SyncPlaylist(ctx context.Context, batchID string) (*PlaylistCre
 		if job.Status == models.JobStatusCompleted {
 			completedJobs = append(completedJobs, job)
 		}
+	}
+
+	totalTracks := len(completedJobs)
+
+	// Progress: 20%
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "sync", 20, fmt.Sprintf("Preparing to sync %d tracks...", totalTracks), 0, totalTracks)
 	}
 
 	// Update batch status to creating
@@ -153,7 +208,20 @@ func (s *Syncer) SyncPlaylist(ctx context.Context, batchID string) (*PlaylistCre
 	}
 
 	// Create or update playlist with completed jobs
-	result := client.CreatePlaylistWithDetails(ctx, batch.Name, completedJobs)
+	// Pass progress callback to client
+	result := client.CreatePlaylistWithDetailsAndProgress(ctx, batch.Name, completedJobs, func(current, total int, trackName string) {
+		// Calculate progress: 20% to 90% is for track matching
+		progress := 20 + int(float64(current)/float64(total)*70)
+		message := fmt.Sprintf("Matching track %d/%d: %s", current, total, trackName)
+		if s.hub != nil {
+			s.hub.BroadcastPlaylistProgress(userID, batchID, "sync", progress, message, current, total)
+		}
+	})
+
+	// Progress: 95%
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "sync", 95, "Finalizing playlist...", totalTracks, totalTracks)
+	}
 
 	// Update batch with results
 	status := models.PlaylistStatusCompleted
@@ -163,6 +231,17 @@ func (s *Syncer) SyncPlaylist(ctx context.Context, batchID string) (*PlaylistCre
 	err = s.db.UpdateBatchPlaylistStatus(batchID, status, result.PlaylistID, result.Error, result.TracksFound, result.TracksFailed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update batch: %w", err)
+	}
+
+	// Progress: 100%
+	if s.hub != nil {
+		message := fmt.Sprintf("Synced %d/%d tracks", result.TracksFound, result.TotalTracks)
+		s.hub.BroadcastPlaylistProgress(userID, batchID, "sync", 100, message, totalTracks, totalTracks)
+	}
+
+	// Send final playlist update
+	if s.hub != nil {
+		s.hub.BroadcastPlaylistUpdate(userID, batchID, string(status), result.PlaylistID, "", result.TracksFound, result.TracksFailed, result.TotalTracks)
 	}
 
 	return result, nil

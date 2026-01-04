@@ -647,6 +647,75 @@ func (c *Client) CreatePlaylistWithDetails(ctx context.Context, playlistName str
 	return result
 }
 
+// CreatePlaylistWithDetailsAndProgress creates or updates a playlist with detailed search results and progress callbacks
+func (c *Client) CreatePlaylistWithDetailsAndProgress(ctx context.Context, playlistName string, jobs []*models.Job, progressCallback func(current, total int, trackName string)) *PlaylistCreationResult {
+	result := &PlaylistCreationResult{
+		PlaylistName: playlistName,
+		TotalTracks:  len(jobs),
+		TrackResults: make([]TrackSearchResult, 0, len(jobs)),
+	}
+
+	if len(jobs) == 0 {
+		result.Success = true
+		return result
+	}
+
+	foundTrackIDs := make([]string, 0, len(jobs))
+	tracksFound := 0
+	tracksFailed := 0
+
+	for i, job := range jobs {
+		searchResult := TrackSearchResult{
+			JobID:      job.ID,
+			TrackName:  job.TrackName,
+			ArtistName: job.ArtistName,
+			Found:      false,
+		}
+
+		// Send progress update
+		if progressCallback != nil {
+			progressCallback(i+1, len(jobs), job.TrackName)
+		}
+
+		// Only use title/artist search
+		track, err := c.SearchTrackByTitle(ctx, job.TrackName, job.ArtistName)
+		if err != nil {
+			log.Printf("[navidrome] title/artist search failed for %s (%s): %v", job.TrackName, job.ArtistName, err)
+			searchResult.Error = err.Error()
+			searchResult.SearchMethod = "title"
+			tracksFailed++
+			log.Printf("[navidrome] could not find track '%s' by '%s': %v", job.TrackName, job.ArtistName, err)
+		} else {
+			searchResult.TrackID = track.ID
+			searchResult.Found = true
+			searchResult.SearchMethod = "title"
+			foundTrackIDs = append(foundTrackIDs, track.ID)
+			tracksFound++
+			log.Printf("[navidrome] found track '%s' by '%s' (ID: %s, method: title)", job.TrackName, job.ArtistName, track.ID)
+		}
+
+		result.TrackResults = append(result.TrackResults, searchResult)
+	}
+
+	result.TracksFound = tracksFound
+	result.TracksFailed = tracksFailed
+
+	// Create or update the playlist with found tracks
+	playlistID, err := c.CreateOrUpdatePlaylist(ctx, playlistName, foundTrackIDs)
+	if err != nil {
+		result.Error = err.Error()
+		result.Success = false
+		return result
+	}
+
+	result.PlaylistID = playlistID
+	result.Success = true
+
+	log.Printf("[navidrome] created/updated playlist '%s' (ID: %s) with %d/%d tracks", playlistName, playlistID, tracksFound, len(jobs))
+
+	return result
+}
+
 // WaitForScanComplete waits for an ongoing scan to complete, with timeout
 func (c *Client) WaitForScanComplete(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

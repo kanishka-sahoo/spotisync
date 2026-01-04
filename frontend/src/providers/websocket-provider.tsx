@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react'
 import { useJobStore } from '@/stores/useJobStore'
 import { useQueryClient } from '@tanstack/react-query'
-import { Job, JobStatus, PlaylistUpdatePayload } from '@/lib/types'
+import { Job, JobStatus, PlaylistUpdatePayload, PlaylistProgressPayload } from '@/lib/types'
 import { getConfig, getWsUrl as getWsUrlFromConfig } from '@/lib/config'
 
 interface WebSocketContextType {
@@ -23,8 +23,8 @@ interface WebSocketPayload {
 }
 
 interface WebSocketMessage {
-  type: 'job_update' | 'batch_update' | 'playlist_update' | 'error'
-  payload: WebSocketPayload | PlaylistUpdatePayload
+  type: 'job_update' | 'batch_update' | 'playlist_update' | 'playlist_progress' | 'error'
+  payload: WebSocketPayload | PlaylistUpdatePayload | PlaylistProgressPayload
 }
 
 const WebSocketContext = createContext<WebSocketContextType>({ isConnected: false })
@@ -148,6 +148,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           }
           // Also invalidate batches list to show playlist status changes
           queryClient.invalidateQueries({ queryKey: ['batches'] })
+        } else if (message.type === 'playlist_progress') {
+          console.log('[WebSocket] Playlist progress:', message.payload)
+          const payload = message.payload as PlaylistProgressPayload
+          // Invalidate batch query to trigger UI update with progress
+          if (payload.batch_id) {
+            queryClient.setQueryData(['playlistProgress', payload.batch_id], payload)
+          }
         } else if (message.type === 'error') {
           console.error('[WebSocket] Server error:', message.payload)
         }

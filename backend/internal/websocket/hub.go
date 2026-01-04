@@ -341,6 +341,25 @@ func (h *Hub) BroadcastPlaylistUpdate(userID int64, batchID string, status strin
 	h.BroadcastToUser(userID, msg)
 }
 
+// BroadcastPlaylistProgress sends detailed progress updates during playlist operations
+func (h *Hub) BroadcastPlaylistProgress(userID int64, batchID string, operation string, progress int, message string, currentTrack int, totalTracks int) {
+	data := map[string]interface{}{
+		"type": "playlist_progress",
+		"payload": map[string]interface{}{
+			"batch_id":      batchID,
+			"operation":     operation, // "check" or "sync"
+			"progress":      progress,  // 0-100
+			"message":       message,
+			"current_track": currentTrack,
+			"total_tracks":  totalTracks,
+			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+
+	msg, _ := json.Marshal(data)
+	h.BroadcastToUser(userID, msg)
+}
+
 // readPump pumps messages from the websocket connection to the hub
 func (c *Client) readPump() {
 	defer func() {

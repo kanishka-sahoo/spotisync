@@ -72,7 +72,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	jobScheduler := scheduler.NewJobSchedulerWithOrchestrator(database, cfg.Workers.Count, retryPolicy, cfg, hub)
 
 	// Initialize playlist syncer (creates per-user Navidrome clients at request time)
-	playlistSyncer := navidrome.NewSyncer(database)
+	playlistSyncer := navidrome.NewSyncer(database, hub)
 
 	// Initialize router
 	router := chi.NewRouter()
