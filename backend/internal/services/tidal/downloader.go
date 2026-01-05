@@ -326,7 +326,7 @@ func (c *Client) DownloadFromManifest(ctx context.Context, manifestB64, outputPa
 
 	// Create HTTP client with longer timeout for downloads
 	client := &http.Client{
-		Timeout: 120 * time.Second,
+		Timeout: 600 * time.Second, // 10 minutes - sufficient for large files over slow connections
 	}
 
 	// If we have a direct URL (BTS format), download directly

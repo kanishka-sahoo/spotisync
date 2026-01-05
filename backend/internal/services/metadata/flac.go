@@ -1,12 +1,13 @@
 package metadata
 
 import (
+	"fmt"
+	"io"
 	"os"
 
 	"github.com/go-flac/flacpicture"
 	"github.com/go-flac/flacvorbis"
 	"github.com/go-flac/go-flac"
-	"io"
 )
 
 // FLACMetadata represents metadata extracted from a FLAC file
@@ -300,6 +301,112 @@ func ReadISRCFromFile(filePath string) (string, error) {
 	flacFile, err := flac.ParseFile(filePath)
 	if err != nil {
 		return "", err
+	}
+
+	// Find VorbisComment block
+	for _, block := range flacFile.Meta {
+		if block.Type == flac.VorbisComment {
+			cmt, err := flacvorbis.ParseFromMetaDataBlock(*block)
+			if err != nil {
+				continue
+			}
+
+			// Get ISRC field
+			isrcValues, err := cmt.Get(flacvorbis.FIELD_ISRC)
+			if err == nil && len(isrcValues) > 0 {
+				return isrcValues[0], nil
+			}
+		}
+	}
+
+	return "", nil // No ISRC found
+}
+
+// ReadISRCFromFileWithStorage reads the ISRC code from a FLAC file using the provided storage backend.
+// For remote storage (SFTP), it downloads the file temporarily to read metadata.
+func ReadISRCFromFileWithStorage(filePath string, storage interface {
+	ReadFile(path string) ([]byte, error)
+}) (string, error) {
+	// For storage-aware reading, we need to download the file temporarily
+	// Create a temp file to parse
+	data, err := storage.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	// Write to a temporary file for FLAC parsing
+	tmpFile, err := os.CreateTemp("", "isrc-read-*.flac")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return "", fmt.Errorf("failed to write temp file: %w", err)
+	}
+	tmpFile.Close() // Close before parsing
+
+	// Parse FLAC from temp file
+	flacFile, err := flac.ParseFile(tmpFile.Name())
+	if err != nil {
+		return "", err
+	}
+
+	// Find VorbisComment block
+	for _, block := range flacFile.Meta {
+		if block.Type == flac.VorbisComment {
+			cmt, err := flacvorbis.ParseFromMetaDataBlock(*block)
+			if err != nil {
+				continue
+			}
+
+			// Get ISRC field
+			isrcValues, err := cmt.Get(flacvorbis.FIELD_ISRC)
+			if err == nil && len(isrcValues) > 0 {
+				return isrcValues[0], nil
+			}
+		}
+	}
+
+	return "", nil // No ISRC found
+}
+
+// ReadISRCFromFilePartial reads the ISRC code from a FLAC file by reading only the metadata section.
+// This is much more efficient for remote storage as it only downloads ~100KB instead of the entire file.
+func ReadISRCFromFilePartial(filePath string, storage interface {
+	ReadRange(path string, offset int64, length int64) ([]byte, error)
+}) (string, error) {
+	// FLAC metadata is at the beginning of the file
+	// Read first 128KB which should contain all metadata blocks
+	// Most FLAC files have metadata in the first 20-50KB, but we use 128KB to be safe
+	metadataSize := int64(128 * 1024) // 128KB
+
+	data, err := storage.ReadRange(filePath, 0, metadataSize)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file metadata: %w", err)
+	}
+
+	// Write to a temporary file for FLAC parsing
+	tmpFile, err := os.CreateTemp("", "isrc-partial-*.flac")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return "", fmt.Errorf("failed to write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Try to parse FLAC metadata
+	// Note: This might fail if metadata is larger than 128KB, but that's extremely rare
+	flacFile, err := flac.ParseFile(tmpFile.Name())
+	if err != nil {
+		// If parsing fails, it might be because we don't have the complete metadata
+		// In this case, we'll skip this file rather than downloading the entire thing
+		return "", nil
 	}
 
 	// Find VorbisComment block

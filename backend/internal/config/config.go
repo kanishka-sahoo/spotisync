@@ -48,9 +48,21 @@ type DatabaseConfig struct {
 
 // StorageConfig holds file storage settings
 type StorageConfig struct {
-	MusicRoot   string   `yaml:"music_root"`
-	TempDir     string   `yaml:"temp_dir"`
-	MaxFileSize ByteSize `yaml:"max_file_size"`
+	MusicRoot   string     `yaml:"music_root"`
+	TempDir     string     `yaml:"temp_dir"`
+	MaxFileSize ByteSize   `yaml:"max_file_size"`
+	Type        string     `yaml:"type"` // "local" or "sftp"
+	SFTP        SFTPConfig `yaml:"sftp"`
+}
+
+// SFTPConfig holds SFTP connection settings
+type SFTPConfig struct {
+	Host       string `yaml:"host"`
+	Port       int    `yaml:"port"`
+	Username   string `yaml:"username"`
+	Password   string `yaml:"password"`
+	SSHKeyPath string `yaml:"ssh_key_path"`
+	RemotePath string `yaml:"remote_path"`
 }
 
 // ByteSize represents a size in bytes with human-readable format support
@@ -230,6 +242,8 @@ func (c *Config) setDockerDefaults() {
 	c.Storage.MusicRoot = "/data/music"
 	c.Storage.TempDir = "/data/temp"
 	c.Storage.MaxFileSize = ByteSize(500 * 1024 * 1024) // 500MB
+	c.Storage.Type = "local"                            // Default to local storage
+	c.Storage.SFTP.Port = 22                            // Default SFTP port
 
 	// Workers defaults
 	c.Workers.Count = 2
@@ -297,6 +311,29 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("SPOTISYNC_TEMP_DIR"); v != "" {
 		c.Storage.TempDir = v
+	}
+	if v := os.Getenv("STORAGE_TYPE"); v != "" {
+		c.Storage.Type = v
+	}
+
+	// SFTP overrides
+	if v := os.Getenv("SFTP_HOST"); v != "" {
+		c.Storage.SFTP.Host = v
+	}
+	if v := os.Getenv("SFTP_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Storage.SFTP.Port)
+	}
+	if v := os.Getenv("SFTP_USERNAME"); v != "" {
+		c.Storage.SFTP.Username = v
+	}
+	if v := os.Getenv("SFTP_PASSWORD"); v != "" {
+		c.Storage.SFTP.Password = v
+	}
+	if v := os.Getenv("SFTP_SSH_KEY_PATH"); v != "" {
+		c.Storage.SFTP.SSHKeyPath = v
+	}
+	if v := os.Getenv("SFTP_REMOTE_PATH"); v != "" {
+		c.Storage.SFTP.RemotePath = v
 	}
 
 	// Workers overrides
@@ -398,6 +435,12 @@ func (c *Config) setDefaults() {
 	if c.Storage.MaxFileSize == 0 {
 		c.Storage.MaxFileSize = ByteSize(500 * 1024 * 1024) // 500MB
 	}
+	if c.Storage.Type == "" {
+		c.Storage.Type = "local" // Default to local storage
+	}
+	if c.Storage.SFTP.Port == 0 {
+		c.Storage.SFTP.Port = 22 // Default SFTP port
+	}
 
 	// Workers defaults
 	if c.Workers.Count == 0 {
@@ -464,6 +507,30 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("allowed_origins is required in production mode. Set it via config file or SPOTISYNC_ALLOWED_ORIGINS environment variable")
 	}
 
+	// Validate storage configuration
+	if c.Storage.Type != "" && c.Storage.Type != "local" && c.Storage.Type != "sftp" {
+		return fmt.Errorf("invalid storage type: %s (must be 'local' or 'sftp')", c.Storage.Type)
+	}
+
+	// Validate SFTP configuration if SFTP storage is selected
+	if c.Storage.Type == "sftp" {
+		if c.Storage.SFTP.Host == "" {
+			return fmt.Errorf("SFTP host is required when storage type is 'sftp'")
+		}
+		if c.Storage.SFTP.Port <= 0 || c.Storage.SFTP.Port > 65535 {
+			return fmt.Errorf("invalid SFTP port: %d", c.Storage.SFTP.Port)
+		}
+		if c.Storage.SFTP.Username == "" {
+			return fmt.Errorf("SFTP username is required when storage type is 'sftp'")
+		}
+		if c.Storage.SFTP.Password == "" && c.Storage.SFTP.SSHKeyPath == "" {
+			return fmt.Errorf("either SFTP password or SSH key path is required when storage type is 'sftp'")
+		}
+		if c.Storage.SFTP.RemotePath == "" {
+			return fmt.Errorf("SFTP remote path is required when storage type is 'sftp'")
+		}
+	}
+
 	return nil
 }
 
@@ -475,5 +542,6 @@ func (c *Config) MaskSensitive() *Config {
 	masked.Sources.Tidal.ClientSecret = "***"
 	masked.Sources.Qobuz.Secret = "***"
 	masked.Navidrome.Password = "***"
+	masked.Storage.SFTP.Password = "***"
 	return &masked
 }

@@ -12,6 +12,7 @@ import (
 	"spotisync/internal/db/models"
 	"spotisync/internal/services/download"
 	"spotisync/internal/services/navidrome"
+	"spotisync/internal/storage"
 	"spotisync/internal/websocket"
 )
 
@@ -57,6 +58,31 @@ func NewJobSchedulerWithOrchestrator(database *db.Database, numWorkers int, retr
 		workers[i] = NewWorker(i, nil)
 	}
 
+	// Initialize storage backend based on config
+	storageConfig := storage.Config{
+		Type: cfg.Storage.Type,
+		SFTP: storage.SFTPConfig{
+			Host:       cfg.Storage.SFTP.Host,
+			Port:       cfg.Storage.SFTP.Port,
+			Username:   cfg.Storage.SFTP.Username,
+			Password:   cfg.Storage.SFTP.Password,
+			SSHKeyPath: cfg.Storage.SFTP.SSHKeyPath,
+			RemotePath: cfg.Storage.SFTP.RemotePath,
+		},
+	}
+
+	storageBackend, err := storage.NewStorage(storageConfig)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage backend: %v", err)
+	}
+
+	// Determine the music root path based on storage type
+	musicRoot := cfg.Storage.MusicRoot
+	if cfg.Storage.Type == "sftp" {
+		// When using SFTP storage, use the remote path for building file paths
+		musicRoot = cfg.Storage.SFTP.RemotePath
+	}
+
 	// Create the download orchestrator
 	// Use Sources config for Tidal/Qobuz credentials (these are optional)
 	orchestratorCfg := download.OrchestratorConfig{
@@ -64,9 +90,10 @@ func NewJobSchedulerWithOrchestrator(database *db.Database, numWorkers int, retr
 		TidalClientSecret: cfg.Sources.Tidal.ClientSecret,
 		QobuzAppID:        cfg.Sources.Qobuz.AppID,
 		QobuzSecret:       cfg.Sources.Qobuz.Secret,
-		MusicRoot:         cfg.Storage.MusicRoot,
+		MusicRoot:         musicRoot,
 		TempDir:           cfg.Storage.TempDir,
 		UseThirdPartyAPIs: true, // Default to third-party APIs
+		Storage:           storageBackend,
 	}
 	orchestrator := download.NewOrchestrator(orchestratorCfg)
 

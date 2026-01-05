@@ -24,36 +24,52 @@ services:
       - SPOTISYNC_LOG_LEVEL=${SPOTISYNC_LOG_LEVEL:-info}
       - SPOTISYNC_SECRET_KEY=${SPOTISYNC_SECRET_KEY:?required}
       - SPOTISYNC_ALLOWED_ORIGINS=${SPOTISYNC_ALLOWED_ORIGINS:-*}
+      
       # Database & Storage (internal Docker paths)
       - SPOTISYNC_DB_PATH=/data/db/spotisync.db
       - SPOTISYNC_MUSIC_ROOT=/data/music
       - SPOTISYNC_TEMP_DIR=/data/temp
+      
+      # ⭐ ADD THESE SFTP CONFIGURATION LINES ⭐
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - SFTP_HOST=${SFTP_HOST:-}
+      - SFTP_PORT=${SFTP_PORT:-22}
+      - SFTP_USERNAME=${SFTP_USERNAME:-}
+      - SFTP_PASSWORD=${SFTP_PASSWORD:-}
+      - SFTP_SSH_KEY_PATH=${SFTP_SSH_KEY_PATH:-}
+      - SFTP_REMOTE_PATH=${SFTP_REMOTE_PATH:-}
+      
       # Workers
       - SPOTISYNC_WORKERS=${SPOTISYNC_WORKERS:-2}
+      
       # Spotify API (optional - uses built-in defaults)
       - SPOTISYNC_SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
       - SPOTISYNC_SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
+      
       # Navidrome Integration (optional)
       - SPOTISYNC_NAVIDROME_HOST=${NAVIDROME_HOST:-}
       - SPOTISYNC_NAVIDROME_USER=${NAVIDROME_USER:-}
       - SPOTISYNC_NAVIDROME_PASS=${NAVIDROME_PASS:-}
+      
       # Tidal API (optional - uses third-party APIs by default)
       - SPOTISYNC_TIDAL_CLIENT_ID=${TIDAL_CLIENT_ID:-}
       - SPOTISYNC_TIDAL_CLIENT_SECRET=${TIDAL_CLIENT_SECRET:-}
+      
       # Qobuz API (optional - uses third-party APIs by default)
       - SPOTISYNC_QOBUZ_APP_ID=${QOBUZ_APP_ID:-}
       - SPOTISYNC_QOBUZ_SECRET=${QOBUZ_SECRET:-}
+    
     volumes:
       - spotisync-db:/data/db
       - ${MUSIC_LIBRARY_PATH:-./music}:/data/music
       - spotisync-temp:/data/temp
+    
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-
   frontend:
     build:
       context: ./frontend
@@ -69,7 +85,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-
 volumes:
   spotisync-db:
   spotisync-temp:

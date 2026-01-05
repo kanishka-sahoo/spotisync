@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"spotisync/internal/db/models"
 	"spotisync/internal/services/cover"
@@ -18,6 +19,7 @@ import (
 	"spotisync/internal/services/metadata"
 	"spotisync/internal/services/qobuz"
 	"spotisync/internal/services/tidal"
+	"spotisync/internal/storage"
 	"spotisync/internal/utils"
 )
 
@@ -30,6 +32,7 @@ type Orchestrator struct {
 	musicRoot         string
 	tempDir           string
 	useThirdPartyAPIs bool
+	storage           storage.Storage   // Storage backend (local or SFTP)
 	isrcIndex         map[string]string // ISRC -> file path cache for duplicate detection
 	isrcIndexMu       sync.RWMutex      // Mutex for thread-safe access to ISRC index
 	isrcIndexBuilt    bool              // Whether the ISRC index has been built
@@ -43,7 +46,8 @@ type OrchestratorConfig struct {
 	QobuzSecret       string
 	MusicRoot         string
 	TempDir           string
-	UseThirdPartyAPIs bool // When true, use third-party APIs instead of official APIs (default: true)
+	UseThirdPartyAPIs bool            // When true, use third-party APIs instead of official APIs (default: true)
+	Storage           storage.Storage // Storage backend implementation
 }
 
 // NewOrchestrator creates a new download orchestrator
@@ -82,6 +86,11 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	// Create lyrics fetcher with default config
 	lyricsFetcher := lyrics.NewLyricsFetcher(lyrics.LyricsConfig{})
 
+	// Validate storage is provided
+	if cfg.Storage == nil {
+		log.Fatal("Storage backend is required but was not provided in OrchestratorConfig")
+	}
+
 	return &Orchestrator{
 		tidalClient:       tidalClient,
 		qobuzClient:       qobuzClient,
@@ -90,6 +99,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		musicRoot:         cfg.MusicRoot,
 		tempDir:           cfg.TempDir,
 		useThirdPartyAPIs: useThirdParty,
+		storage:           cfg.Storage,
 		isrcIndex:         make(map[string]string),
 	}
 }
@@ -209,24 +219,13 @@ func (o *Orchestrator) DownloadTrack(ctx context.Context, job *models.Job, progr
 		progressCallback(60, "Creating output directory")
 	}
 
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := o.storage.MkdirAll(outputDir, 0755); err != nil {
 		return nil, NewFilesystemError("failed to create output directory", err)
 	}
 
-	// Step 5: Move file to final location
+	// Step 5: Handle cover art (with deduplication)
 	if progressCallback != nil {
-		progressCallback(65, "Moving file to library")
-	}
-
-	if err := o.moveFile(downloadResult.LocalPath, finalPath); err != nil {
-		return nil, NewFilesystemError("failed to move file to library", err)
-	}
-	downloadResult.LocalPath = finalPath
-	downloadResult.SongStatus = "completed"
-
-	// Step 6: Handle cover art (with deduplication)
-	if progressCallback != nil {
-		progressCallback(70, "Fetching cover art")
+		progressCallback(65, "Fetching cover art")
 	}
 
 	coverPath := o.handleCoverArt(ctx, job, outputDir)
@@ -237,34 +236,61 @@ func (o *Orchestrator) DownloadTrack(ctx context.Context, job *models.Job, progr
 		downloadResult.CoverStatus = "not_found"
 	}
 
-	// Step 7: Embed metadata into FLAC
+	// Step 6: Embed metadata into local temp file (before upload)
 	if progressCallback != nil {
-		progressCallback(80, "Embedding metadata")
+		progressCallback(70, "Embedding metadata")
 	}
 
-	if err := o.embedMetadata(job, finalPath, coverPath); err != nil {
+	if err := o.embedMetadataLocal(job, downloadResult.LocalPath, coverPath); err != nil {
 		log.Printf("Warning: failed to embed metadata: %v", err)
 		// Don't fail the download for metadata errors
 	}
 
+	// Step 7: Fetch and embed lyrics into local temp file (before upload)
+	if progressCallback != nil {
+		progressCallback(80, "Fetching and embedding lyrics")
+	}
+
+	lyricsPath, lyricsContent := o.fetchLyrics(job, outputDir, finalFilename)
+	if lyricsContent != "" {
+		if err := o.embedLyricsLocal(downloadResult.LocalPath, lyricsContent); err != nil {
+			log.Printf("Warning: failed to embed lyrics: %v", err)
+			// Clear lyrics path if embedding failed
+			lyricsPath = ""
+			lyricsContent = ""
+		}
+	}
+
+	// Step 8: Move file to final location (upload to storage ONCE with all metadata)
+	if progressCallback != nil {
+		progressCallback(90, "Moving file to library")
+	}
+
+	if err := o.moveFile(downloadResult.LocalPath, finalPath); err != nil {
+		return nil, NewFilesystemError("failed to move file to library", err)
+	}
+	downloadResult.LocalPath = finalPath
+	downloadResult.SongStatus = "completed"
+
 	// Add to ISRC index for future duplicate detection
 	o.AddToISRCIndex(job.ISRC, finalPath)
 
-	// Step 8: Fetch and save lyrics
-	if progressCallback != nil {
-		progressCallback(90, "Fetching lyrics")
-	}
-
-	lyricsPath := o.handleLyrics(job, outputDir, finalFilename, finalPath)
-	if lyricsPath != "" {
-		downloadResult.LyricsPath = lyricsPath
-		downloadResult.LyricsStatus = "completed"
+	// Step 9: Save lyrics .lrc file separately if we have lyrics
+	if lyricsContent != "" && lyricsPath != "" {
+		if err := o.storage.WriteFile(lyricsPath, []byte(lyricsContent), 0644); err != nil {
+			log.Printf("Failed to save lyrics file: %v", err)
+			lyricsPath = ""
+		} else {
+			log.Printf("Saved lyrics: %s", lyricsPath)
+			downloadResult.LyricsPath = lyricsPath
+			downloadResult.LyricsStatus = "completed"
+		}
 	} else {
 		downloadResult.LyricsStatus = "not_found"
 	}
 
 	// Step 9: Get final file size
-	if fi, err := os.Stat(finalPath); err == nil {
+	if fi, err := o.storage.Stat(finalPath); err == nil {
 		downloadResult.FileSize = fi.Size()
 	}
 
@@ -446,12 +472,14 @@ func (o *Orchestrator) buildFilename(job *models.Job) string {
 
 // checkExistingFile checks if a file exists and returns its ISRC if it's a FLAC
 func (o *Orchestrator) checkExistingFile(path string, expectedISRC string) (exists bool, isrc string) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if _, err := o.storage.Stat(path); os.IsNotExist(err) {
 		return false, ""
 	}
 
 	// Try to read ISRC from existing FLAC file
-	existingISRC, err := metadata.ReadISRCFromFile(path)
+	// Note: This requires downloading the file temporarily to read metadata
+	// For SFTP, this adds overhead but is necessary for duplicate detection
+	existingISRC, err := o.readISRCFromStorage(path)
 	if err != nil {
 		return true, ""
 	}
@@ -459,29 +487,44 @@ func (o *Orchestrator) checkExistingFile(path string, expectedISRC string) (exis
 	return true, existingISRC
 }
 
-// moveFile moves a file from src to dst
+// readISRCFromStorage reads ISRC from a file in storage
+// For local storage, reads directly. For SFTP, downloads temporarily.
+func (o *Orchestrator) readISRCFromStorage(path string) (string, error) {
+	// Try to read the file via storage
+	data, err := o.storage.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	// Write to temporary file for metadata reading
+	tempFile := filepath.Join(o.tempDir, "temp_metadata_"+filepath.Base(path))
+	if err := os.WriteFile(tempFile, data, 0644); err != nil {
+		return "", err
+	}
+	defer os.Remove(tempFile)
+
+	return metadata.ReadISRCFromFile(tempFile)
+}
+
+// moveFile moves a file from src (local temp) to dst (via storage backend)
 func (o *Orchestrator) moveFile(src, dst string) error {
-	// Ensure destination directory exists
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
-	// Try rename first (fastest if on same filesystem)
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-
-	// Fall back to copy + delete
+	// Read file from local temp directory
 	input, err := os.ReadFile(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read source file: %w", err)
 	}
 
-	if err := os.WriteFile(dst, input, 0644); err != nil {
-		return err
+	// Write to storage backend (handles directory creation internally)
+	if err := o.storage.WriteFile(dst, input, 0644); err != nil {
+		return fmt.Errorf("failed to write to storage: %w", err)
 	}
 
-	return os.Remove(src)
+	// Clean up local temp file
+	if err := os.Remove(src); err != nil {
+		log.Printf("Warning: failed to remove temp file %s: %v", src, err)
+	}
+
+	return nil
 }
 
 // handleCoverArt fetches and saves cover art (with deduplication per album)
@@ -498,18 +541,18 @@ func (o *Orchestrator) handleCoverArt(ctx context.Context, job *models.Job, outp
 		}
 	}
 
-	// Check if cover already exists for this album
-	existingPath, exists := o.coverFetcher.CheckAlbumCoverExists(outputDir, albumArtist, job.AlbumName)
-	if exists {
-		log.Printf("Using existing cover art: %s", existingPath)
-		return existingPath
+	// Check if cover already exists via storage
+	coverPath := filepath.Join(outputDir, "cover.jpg")
+	if _, err := o.storage.Stat(coverPath); err == nil {
+		log.Printf("Using existing cover art: %s", coverPath)
+		return coverPath
 	}
 
 	// Use Spotify cover URL if available (preferred)
 	if job.CoverArtURL != "" {
-		coverPath := o.downloadSpotifyCover(job.CoverArtURL, outputDir)
-		if coverPath != "" {
-			return coverPath
+		savedPath := o.downloadSpotifyCover(job.CoverArtURL, outputDir)
+		if savedPath != "" {
+			return savedPath
 		}
 	}
 
@@ -520,9 +563,8 @@ func (o *Orchestrator) handleCoverArt(ctx context.Context, job *models.Job, outp
 		return ""
 	}
 
-	// Save the cover as cover.jpg in the album directory
-	coverPath := filepath.Join(outputDir, "cover.jpg")
-	if err := os.WriteFile(coverPath, result.Data, 0644); err != nil {
+	// Save the cover as cover.jpg in the album directory via storage
+	if err := o.storage.WriteFile(coverPath, result.Data, 0644); err != nil {
 		log.Printf("Failed to save cover art: %v", err)
 		return ""
 	}
@@ -572,9 +614,9 @@ func (o *Orchestrator) downloadSpotifyCover(coverURL, outputDir string) string {
 		return ""
 	}
 
-	// Save as cover.jpg
+	// Save as cover.jpg via storage
 	coverPath := filepath.Join(outputDir, "cover.jpg")
-	if err := os.WriteFile(coverPath, data, 0644); err != nil {
+	if err := o.storage.WriteFile(coverPath, data, 0644); err != nil {
 		log.Printf("Failed to save cover art: %v", err)
 		return ""
 	}
@@ -585,6 +627,28 @@ func (o *Orchestrator) downloadSpotifyCover(coverURL, outputDir string) string {
 
 // embedMetadata embeds metadata into the FLAC file
 func (o *Orchestrator) embedMetadata(job *models.Job, flacPath, coverPath string) error {
+	// For storage backends, we need to work with local temp files
+	// Download from storage if needed
+	tempFlacPath, cleanup, err := o.getTempFileForMetadata(flacPath)
+	if err != nil {
+		return fmt.Errorf("failed to prepare file for metadata: %w", err)
+	}
+	defer cleanup()
+
+	// Prepare cover path - download if it's in storage
+	localCoverPath := coverPath
+	if coverPath != "" {
+		tempCoverPath, coverCleanup, err := o.getTempFileForMetadata(coverPath)
+		if err != nil {
+			log.Printf("Warning: failed to prepare cover for embedding: %v", err)
+			// Continue without cover
+			localCoverPath = ""
+		} else {
+			defer coverCleanup()
+			localCoverPath = tempCoverPath
+		}
+	}
+
 	// Use full artist list for metadata, joined with "; " (semicolon + space)
 	artistStr := job.ArtistName
 	if len(job.Artists) > 0 {
@@ -621,7 +685,109 @@ func (o *Orchestrator) embedMetadata(job *models.Job, flacPath, coverPath string
 		meta.Date = strconv.Itoa(job.ReleaseYear)
 	}
 
-	return metadata.EmbedMetadata(flacPath, meta, coverPath)
+	// Embed metadata into local temp file
+	if err := metadata.EmbedMetadata(tempFlacPath, meta, localCoverPath); err != nil {
+		return err
+	}
+
+	// Upload modified file back to storage
+	return o.uploadTempFileToStorage(tempFlacPath, flacPath)
+}
+
+// embedMetadataLocal embeds metadata into a local FLAC file (no storage operations)
+// This is more efficient as it avoids downloading/uploading from storage
+func (o *Orchestrator) embedMetadataLocal(job *models.Job, localFlacPath, localCoverPath string) error {
+	// Use full artist list for metadata, joined with "; "
+	artistStr := job.ArtistName
+	if len(job.Artists) > 0 {
+		artistStr = strings.Join(job.Artists, "; ")
+	}
+
+	// Use full album artist list for metadata
+	albumArtistStr := job.AlbumArtist
+	if len(job.AlbumArtists) > 0 {
+		albumArtistStr = strings.Join(job.AlbumArtists, "; ")
+	} else if albumArtistStr == "" {
+		albumArtistStr = artistStr
+	}
+
+	meta := metadata.Metadata{
+		Title:       job.TrackName,
+		Artist:      artistStr,
+		Album:       job.AlbumName,
+		AlbumArtist: albumArtistStr,
+		Date:        job.ReleaseDate,
+		TrackNumber: strconv.Itoa(job.TrackNumber),
+		TotalTracks: strconv.Itoa(job.TotalTracks),
+		DiscNumber:  strconv.Itoa(job.DiscNumber),
+		TotalDiscs:  strconv.Itoa(job.TotalDiscs),
+		ISRC:        job.ISRC,
+		Genre:       job.Genre,
+		Copyright:   job.Copyright,
+		Label:       job.Label,
+		Explicit:    job.Explicit,
+	}
+
+	// If Date is empty but we have ReleaseYear, use that
+	if meta.Date == "" && job.ReleaseYear > 0 {
+		meta.Date = strconv.Itoa(job.ReleaseYear)
+	}
+
+	// Prepare cover path - download if it's in storage
+	coverPathForEmbed := localCoverPath
+	if localCoverPath != "" {
+		// Check if cover path is in storage (not local temp)
+		if !strings.HasPrefix(localCoverPath, o.tempDir) {
+			// Download cover from storage to temp
+			tempCoverPath, coverCleanup, err := o.getTempFileForMetadata(localCoverPath)
+			if err != nil {
+				log.Printf("Warning: failed to prepare cover for embedding: %v", err)
+				coverPathForEmbed = ""
+			} else {
+				defer coverCleanup()
+				coverPathForEmbed = tempCoverPath
+			}
+		}
+	}
+
+	// Embed metadata directly into local file
+	return metadata.EmbedMetadata(localFlacPath, meta, coverPathForEmbed)
+}
+
+// getTempFileForMetadata gets a local temp file for metadata operations
+// Returns the temp path and a cleanup function
+func (o *Orchestrator) getTempFileForMetadata(storagePath string) (string, func(), error) {
+	// Read from storage
+	data, err := o.storage.ReadFile(storagePath)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read from storage: %w", err)
+	}
+
+	// Create temp file
+	tempPath := filepath.Join(o.tempDir, "metadata_"+filepath.Base(storagePath))
+	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+		return "", nil, fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	cleanup := func() {
+		os.Remove(tempPath)
+	}
+
+	return tempPath, cleanup, nil
+}
+
+// uploadTempFileToStorage uploads a local temp file back to storage
+func (o *Orchestrator) uploadTempFileToStorage(tempPath, storagePath string) error {
+	data, err := os.ReadFile(tempPath)
+	if err != nil {
+		return fmt.Errorf("failed to read temp file: %w", err)
+	}
+
+	if err := o.storage.WriteFile(storagePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write to storage: %w", err)
+	}
+
+	return nil
 }
 
 // handleLyrics fetches lyrics and saves as .lrc file, also embeds into FLAC
@@ -657,9 +823,9 @@ func (o *Orchestrator) handleLyrics(job *models.Job, outputDir, baseFilename str
 		log.Printf("Warning: failed to embed lyrics into FLAC: %v", err)
 	}
 
-	// Save lyrics file alongside the FLAC
+	// Save lyrics file alongside the FLAC via storage
 	lyricsPath := filepath.Join(outputDir, baseFilename+".lrc")
-	if err := os.WriteFile(lyricsPath, []byte(lyricsContent), 0644); err != nil {
+	if err := o.storage.WriteFile(lyricsPath, []byte(lyricsContent), 0644); err != nil {
 		log.Printf("Failed to save lyrics: %v", err)
 		return ""
 	}
@@ -670,8 +836,15 @@ func (o *Orchestrator) handleLyrics(job *models.Job, outputDir, baseFilename str
 
 // embedLyricsIntoFLAC embeds lyrics into an existing FLAC file
 func (o *Orchestrator) embedLyricsIntoFLAC(flacPath, lyrics string) error {
+	// Download file from storage to temp
+	tempFlacPath, cleanup, err := o.getTempFileForMetadata(flacPath)
+	if err != nil {
+		return fmt.Errorf("failed to prepare file for lyrics: %w", err)
+	}
+	defer cleanup()
+
 	// Read existing metadata from the FLAC file
-	existingMeta, err := metadata.ExtractMetadata(flacPath)
+	existingMeta, err := metadata.ExtractMetadata(tempFlacPath)
 	if err != nil {
 		return fmt.Errorf("failed to read existing metadata: %w", err)
 	}
@@ -690,7 +863,72 @@ func (o *Orchestrator) embedLyricsIntoFLAC(flacPath, lyrics string) error {
 	}
 
 	// Re-embed metadata with lyrics (cover art is already embedded, pass empty string)
-	return metadata.EmbedMetadata(flacPath, meta, "")
+	if err := metadata.EmbedMetadata(tempFlacPath, meta, ""); err != nil {
+		return err
+	}
+
+	// Upload modified file back to storage
+	return o.uploadTempFileToStorage(tempFlacPath, flacPath)
+}
+
+// embedLyricsLocal embeds lyrics into a local FLAC file (no storage operations)
+// This is more efficient as it avoids downloading/uploading from storage
+func (o *Orchestrator) embedLyricsLocal(localFlacPath, lyrics string) error {
+	// Read existing metadata from the local FLAC file
+	existingMeta, err := metadata.ExtractMetadata(localFlacPath)
+	if err != nil {
+		return fmt.Errorf("failed to read existing metadata: %w", err)
+	}
+
+	// Build metadata struct with existing values plus lyrics
+	meta := metadata.Metadata{
+		Title:       existingMeta.Title,
+		Artist:      existingMeta.Artist,
+		Album:       existingMeta.Album,
+		AlbumArtist: existingMeta.AlbumArtist,
+		Date:        existingMeta.Date,
+		TrackNumber: existingMeta.TrackNumber,
+		DiscNumber:  existingMeta.DiscNumber,
+		Genre:       existingMeta.Genre,
+		Lyrics:      lyrics,
+	}
+
+	// Re-embed metadata with lyrics directly into local file (cover art already embedded, pass empty string)
+	return metadata.EmbedMetadata(localFlacPath, meta, "")
+}
+
+// fetchLyrics fetches lyrics and returns the .lrc file path and content
+// Does not save or embed - that's done separately
+func (o *Orchestrator) fetchLyrics(job *models.Job, outputDir, baseFilename string) (string, string) {
+	// Fetch lyrics from LRCLIB
+	result := o.lyricsFetcher.FetchLyricsWithFallback(job.ArtistName, job.TrackName)
+	if result.Error != nil {
+		log.Printf("Failed to fetch lyrics from LRCLIB: %v", result.Error)
+		return "", ""
+	}
+
+	// Build lyrics content
+	var lyricsContent string
+	if len(result.Synced) > 0 {
+		// Use synced lyrics (LRC format)
+		var lines []string
+		for _, line := range result.Synced {
+			timestamp := lyrics.FormatDuration(line.Start)
+			lines = append(lines, timestamp+line.Text)
+		}
+		lyricsContent = strings.Join(lines, "\n")
+		log.Printf("Fetched synced lyrics (%d lines)", len(result.Synced))
+	} else if result.Unsynced != "" {
+		// Use unsynced lyrics (plain text)
+		lyricsContent = result.Unsynced
+		log.Printf("Fetched plain lyrics")
+	} else {
+		return "", ""
+	}
+
+	// Return path and content (caller decides whether to save)
+	lyricsPath := filepath.Join(outputDir, baseFilename+".lrc")
+	return lyricsPath, lyricsContent
 }
 
 // HasTidal returns true if Tidal client is configured
@@ -714,10 +952,12 @@ func (o *Orchestrator) BuildISRCIndex() {
 	o.isrcIndexMu.Lock()
 	defer o.isrcIndexMu.Unlock()
 
-	log.Printf("Building ISRC index for %s...", o.musicRoot)
-	o.isrcIndex = metadata.BuildISRCIndex(o.musicRoot)
+	log.Printf("Building ISRC index for %s (this may take a moment for remote storage)...", o.musicRoot)
+	startTime := time.Now()
+	o.isrcIndex = metadata.BuildISRCIndexWithStorage(o.musicRoot, o.storage)
 	o.isrcIndexBuilt = true
-	log.Printf("ISRC index built with %d entries", len(o.isrcIndex))
+	duration := time.Since(startTime)
+	log.Printf("ISRC index built with %d entries in %.2f seconds", len(o.isrcIndex), duration.Seconds())
 }
 
 // CheckISRCInLibrary checks if an ISRC exists anywhere in the cached library index.

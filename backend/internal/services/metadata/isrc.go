@@ -157,3 +157,42 @@ func BuildISRCIndex(outputDir string) map[string]string {
 
 	return index
 }
+
+// BuildISRCIndexWithStorage builds an index of ISRC codes using the provided storage backend.
+// This allows scanning both local filesystems and remote SFTP servers.
+func BuildISRCIndexWithStorage(outputDir string, storage interface {
+	Walk(root string, walkFn func(path string, info os.FileInfo, err error) error) error
+	ReadRange(path string, offset int64, length int64) ([]byte, error)
+}) map[string]string {
+	index := make(map[string]string)
+
+	// Walk through all FLAC files using the storage backend
+	storage.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Only process FLAC files
+		if !strings.HasSuffix(strings.ToLower(path), ".flac") {
+			return nil
+		}
+
+		// Read ISRC from the file using partial read (much faster for remote storage)
+		isrc, err := ReadISRCFromFilePartial(path, storage)
+		if err != nil || isrc == "" {
+			return nil
+		}
+
+		// Add to index
+		index[isrc] = path
+
+		return nil
+	})
+
+	return index
+}

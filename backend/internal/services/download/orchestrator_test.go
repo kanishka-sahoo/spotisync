@@ -1,15 +1,17 @@
 package download
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"spotisync/internal/db/models"
+	"spotisync/internal/storage"
 )
 
 func TestNewOrchestrator(t *testing.T) {
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		TidalClientID:     "test-tidal-id",
 		TidalClientSecret: "test-tidal-secret",
@@ -17,6 +19,7 @@ func TestNewOrchestrator(t *testing.T) {
 		QobuzSecret:       "test-qobuz-secret",
 		MusicRoot:         "/tmp/music",
 		TempDir:           "/tmp/temp",
+		Storage:           localStorage,
 	}
 
 	o := NewOrchestrator(cfg)
@@ -41,9 +44,12 @@ func TestNewOrchestrator(t *testing.T) {
 func TestNewOrchestrator_ThirdPartyDefault(t *testing.T) {
 	// When no credentials are provided but UseThirdPartyAPIs is not explicitly disabled,
 	// third-party APIs are enabled by default and clients are created
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: "/tmp/music",
 		TempDir:   "/tmp/temp",
+		Storage:   localStorage,
 	}
 
 	o := NewOrchestrator(cfg)
@@ -70,10 +76,13 @@ func TestNewOrchestrator_OfficialAPIsNoCredentials(t *testing.T) {
 	// When UseThirdPartyAPIs is explicitly set to false but no credentials are provided,
 	// third-party APIs are still used as a fallback (since official APIs can't work without credentials)
 	// The condition to use official APIs requires BOTH UseThirdPartyAPIs=false AND credentials present
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot:         "/tmp/music",
 		TempDir:           "/tmp/temp",
 		UseThirdPartyAPIs: false,
+		Storage:           localStorage,
 	}
 
 	o := NewOrchestrator(cfg)
@@ -100,6 +109,8 @@ func TestNewOrchestrator_OfficialAPIsNoCredentials(t *testing.T) {
 func TestNewOrchestrator_OfficialAPIsWithCredentials(t *testing.T) {
 	// When UseThirdPartyAPIs is explicitly set to false AND credentials are provided,
 	// official APIs are used instead of third-party APIs
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		TidalClientID:     "test-tidal-id",
 		TidalClientSecret: "test-tidal-secret",
@@ -108,6 +119,7 @@ func TestNewOrchestrator_OfficialAPIsWithCredentials(t *testing.T) {
 		MusicRoot:         "/tmp/music",
 		TempDir:           "/tmp/temp",
 		UseThirdPartyAPIs: false,
+		Storage:           localStorage,
 	}
 
 	o := NewOrchestrator(cfg)
@@ -131,9 +143,12 @@ func TestNewOrchestrator_OfficialAPIsWithCredentials(t *testing.T) {
 }
 
 func TestBuildFilename(t *testing.T) {
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: "/tmp/music",
 		TempDir:   "/tmp/temp",
+		Storage:   localStorage,
 	}
 	o := NewOrchestrator(cfg)
 
@@ -242,9 +257,12 @@ func TestDownloadErrors(t *testing.T) {
 }
 
 func TestMoveFile(t *testing.T) {
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: "/tmp/music",
 		TempDir:   "/tmp/temp",
+		Storage:   localStorage,
 	}
 	o := NewOrchestrator(cfg)
 
@@ -277,45 +295,42 @@ func TestMoveFile(t *testing.T) {
 	}
 }
 
-func TestDownloadTrack_NoOrchestrator(t *testing.T) {
-	// Create orchestrator without any download sources
-	// Must explicitly disable third-party APIs to have no sources configured
+func TestDownloadTrack_ThirdPartyFallback(t *testing.T) {
+	// Test that third-party APIs work as a fallback when no credentials are provided
+	// Even with UseThirdPartyAPIs: false, third-party APIs are used as fallback when no credentials
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
-		MusicRoot:         "/tmp/music",
-		TempDir:           "/tmp/temp",
-		UseThirdPartyAPIs: false,
+		MusicRoot:         t.TempDir(),
+		TempDir:           t.TempDir(),
+		UseThirdPartyAPIs: false, // Try to disable, but will fallback to third-party
+		Storage:           localStorage,
 	}
 	o := NewOrchestrator(cfg)
 
-	job := &models.Job{
-		ID:          "test-job-1",
-		TrackName:   "Test Track",
-		ArtistName:  "Test Artist",
-		AlbumName:   "Test Album",
-		AlbumArtist: "Test Album Artist",
-		ISRC:        "USTEST1234567",
-		DiscNumber:  1,
-		TrackNumber: 1,
+	// With third-party fallback, download sources should be available
+	if !o.IsConfigured() {
+		t.Error("Expected orchestrator to be configured with third-party API fallback")
 	}
 
-	ctx := context.Background()
-	result, err := o.DownloadTrack(ctx, job, nil)
-
-	// Without configured clients, download should fail
-	if err == nil {
-		t.Error("Expected error when no download sources are configured")
+	// Note: We can't easily test actual downloads here without mocking,
+	// so we just verify that the orchestrator has clients configured
+	if !o.HasTidal() {
+		t.Error("Expected Tidal client to be configured (third-party fallback)")
 	}
 
-	// Result should indicate not found
-	if result != nil && result.Status == models.JobStatusCompleted {
-		t.Error("Expected non-completed status when no download sources are configured")
+	if !o.HasQobuz() {
+		t.Error("Expected Qobuz client to be configured (third-party fallback)")
 	}
 }
 
 func TestCheckExistingFile(t *testing.T) {
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: "/tmp/music",
 		TempDir:   "/tmp/temp",
+		Storage:   localStorage,
 	}
 	o := NewOrchestrator(cfg)
 
@@ -331,9 +346,12 @@ func TestCheckExistingFile(t *testing.T) {
 
 func TestCheckISRCInLibrary(t *testing.T) {
 	// Create orchestrator with temp directory
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: t.TempDir(),
 		TempDir:   t.TempDir(),
+		Storage:   localStorage,
 	}
 	orchestrator := NewOrchestrator(cfg)
 
@@ -377,9 +395,12 @@ func TestCheckISRCInLibrary(t *testing.T) {
 }
 
 func TestAddToISRCIndex(t *testing.T) {
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: t.TempDir(),
 		TempDir:   t.TempDir(),
+		Storage:   localStorage,
 	}
 	orchestrator := NewOrchestrator(cfg)
 
@@ -419,9 +440,12 @@ func TestAddToISRCIndex(t *testing.T) {
 }
 
 func TestAddToISRCIndex_NilMap(t *testing.T) {
+	localStorage := storage.NewLocalStorage()
+
 	cfg := OrchestratorConfig{
 		MusicRoot: t.TempDir(),
 		TempDir:   t.TempDir(),
+		Storage:   localStorage,
 	}
 	orchestrator := NewOrchestrator(cfg)
 
@@ -445,10 +469,12 @@ func TestAddToISRCIndex_NilMap(t *testing.T) {
 func TestBuildISRCIndex(t *testing.T) {
 	// Create a temp directory to use as music root
 	musicRoot := t.TempDir()
+	localStorage := storage.NewLocalStorage()
 
 	cfg := OrchestratorConfig{
 		MusicRoot: musicRoot,
 		TempDir:   t.TempDir(),
+		Storage:   localStorage,
 	}
 	orchestrator := NewOrchestrator(cfg)
 
