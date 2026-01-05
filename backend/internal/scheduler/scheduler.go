@@ -24,30 +24,33 @@ type JobWithUser struct {
 
 // JobScheduler manages the job queue
 type JobScheduler struct {
-	db           *db.Database
-	queue        chan JobWithUser // job IDs to process with user info
-	workers      []*Worker
-	mu           sync.RWMutex
-	stopChan     chan struct{}
-	retryPolicy  RetryPolicy
-	orchestrator *download.Orchestrator
-	hub          *websocket.Hub
-	cfg          *config.Config
+	db            *db.Database
+	queue         chan JobWithUser // job IDs to process with user info
+	workers       []*Worker
+	mu            sync.RWMutex
+	stopChan      chan struct{}
+	retryPolicy   RetryPolicy
+	orchestrator  *download.Orchestrator
+	hub           *websocket.Hub
+	cfg           *config.Config
+	droppedJobs   int64 // counter for dropped jobs
+	metricsStopCh chan struct{}
 }
 
 // NewJobScheduler creates a new job scheduler
-func NewJobScheduler(database *db.Database, numWorkers int, retryPolicy RetryPolicy) *JobScheduler {
+func NewJobScheduler(database *db.Database, numWorkers int, retryPolicy RetryPolicy, queueSize int) *JobScheduler {
 	workers := make([]*Worker, numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		workers[i] = NewWorker(i, nil)
 	}
 
 	return &JobScheduler{
-		db:          database,
-		queue:       make(chan JobWithUser, 1000),
-		workers:     workers,
-		stopChan:    make(chan struct{}),
-		retryPolicy: retryPolicy,
+		db:            database,
+		queue:         make(chan JobWithUser, queueSize),
+		workers:       workers,
+		stopChan:      make(chan struct{}),
+		retryPolicy:   retryPolicy,
+		metricsStopCh: make(chan struct{}),
 	}
 }
 
@@ -98,14 +101,15 @@ func NewJobSchedulerWithOrchestrator(database *db.Database, numWorkers int, retr
 	orchestrator := download.NewOrchestrator(orchestratorCfg)
 
 	scheduler := &JobScheduler{
-		db:           database,
-		queue:        make(chan JobWithUser, 1000),
-		workers:      workers,
-		stopChan:     make(chan struct{}),
-		retryPolicy:  retryPolicy,
-		orchestrator: orchestrator,
-		hub:          hub,
-		cfg:          cfg,
+		db:            database,
+		queue:         make(chan JobWithUser, cfg.Workers.QueueSize),
+		workers:       workers,
+		stopChan:      make(chan struct{}),
+		retryPolicy:   retryPolicy,
+		orchestrator:  orchestrator,
+		hub:           hub,
+		cfg:           cfg,
+		metricsStopCh: make(chan struct{}),
 	}
 
 	return scheduler
@@ -153,15 +157,42 @@ func (s *JobScheduler) Start(ctx context.Context) {
 
 	// Process queue
 	go s.processQueue(ctx)
+
+	// Start periodic metrics logging
+	go s.logQueueMetrics(ctx)
 }
 
 // Stop stops the scheduler gracefully
 func (s *JobScheduler) Stop() {
 	close(s.stopChan)
+	close(s.metricsStopCh)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, worker := range s.workers {
 		worker.Stop()
+	}
+}
+
+// logQueueMetrics logs queue metrics periodically
+func (s *JobScheduler) logQueueMetrics(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.metricsStopCh:
+			return
+		case <-ticker.C:
+			queueLen := len(s.queue)
+			queueCap := cap(s.queue)
+			droppedJobs := s.droppedJobs
+			utilization := float64(queueLen) / float64(queueCap) * 100
+
+			log.Printf("[Queue Metrics] Queue: %d/%d (%.1f%% full) | Workers: %d | Dropped jobs: %d",
+				queueLen, queueCap, utilization, len(s.workers), droppedJobs)
+		}
 	}
 }
 
@@ -171,10 +202,25 @@ func (s *JobScheduler) Enqueue(jobID string, userID int64) {
 		JobID:  jobID,
 		UserID: userID,
 	}
+
+	queueLen := len(s.queue)
+	queueCap := cap(s.queue)
+	utilization := float64(queueLen) / float64(queueCap)
+
+	// Warn when queue is approaching capacity (80% full)
+	if utilization >= 0.8 && utilization < 1.0 {
+		log.Printf("WARNING: Queue is %.1f%% full (%d/%d). Consider increasing queue size or worker count.",
+			utilization*100, queueLen, queueCap)
+	}
+
 	select {
 	case s.queue <- jobWithUser:
+		// Successfully enqueued
 	default:
-		log.Printf("Queue full, job %s dropped", jobID)
+		// Queue is full - job dropped
+		s.droppedJobs++
+		log.Printf("ERROR: Queue full (%d/%d), job %s dropped. Total dropped: %d",
+			queueCap, queueCap, jobID, s.droppedJobs)
 	}
 }
 

@@ -110,6 +110,7 @@ func (b *ByteSize) UnmarshalYAML(value *yaml.Node) error {
 // WorkersConfig holds worker concurrency settings
 type WorkersConfig struct {
 	Count       int             `yaml:"count"`
+	QueueSize   int             `yaml:"queue_size"`
 	RetryMax    int             `yaml:"retry_max"`
 	RetryDelays []time.Duration `yaml:"retry_delays"`
 }
@@ -246,7 +247,8 @@ func (c *Config) setDockerDefaults() {
 	c.Storage.SFTP.Port = 22                            // Default SFTP port
 
 	// Workers defaults
-	c.Workers.Count = 2
+	c.Workers.Count = 4
+	c.Workers.QueueSize = 10000
 	c.Workers.RetryMax = 3
 	c.Workers.RetryDelays = []time.Duration{
 		1 * time.Minute,
@@ -339,6 +341,9 @@ func (c *Config) applyEnvOverrides() {
 	// Workers overrides
 	if v := os.Getenv("SPOTISYNC_WORKERS"); v != "" {
 		fmt.Sscanf(v, "%d", &c.Workers.Count)
+	}
+	if v := os.Getenv("SPOTISYNC_QUEUE_SIZE"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Workers.QueueSize)
 	}
 
 	// Navidrome overrides
@@ -444,7 +449,10 @@ func (c *Config) setDefaults() {
 
 	// Workers defaults
 	if c.Workers.Count == 0 {
-		c.Workers.Count = 2
+		c.Workers.Count = 4
+	}
+	if c.Workers.QueueSize == 0 {
+		c.Workers.QueueSize = 10000
 	}
 	if c.Workers.RetryMax == 0 {
 		c.Workers.RetryMax = 3
