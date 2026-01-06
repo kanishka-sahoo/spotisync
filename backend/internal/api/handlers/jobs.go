@@ -169,8 +169,13 @@ func (h *JobsHandler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start background fetch for remaining artist tracks
+	// Debug: Log values before checking background fetch condition
+	log.Printf("[debug] About to check background fetch condition - spotifyType=%q, totalJobs=%d, len(tracks)=%d", spotifyType, totalJobs, len(tracks))
 	if spotifyType == "artist" && totalJobs > len(tracks) {
+		log.Printf("[debug] Background fetch condition passed! Spawning goroutine for batchID=%s, resourceID=%s", batch.ID, resourceID)
 		go h.fetchRemainingArtistTracks(context.Background(), batch.ID, resourceID, name, userID, initialTrackIDs)
+	} else {
+		log.Printf("[debug] Background fetch condition failed - spotifyType=%q (expected 'artist'), totalJobs=%d, len(tracks)=%d", spotifyType, totalJobs, len(tracks))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -180,6 +185,8 @@ func (h *JobsHandler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 
 // fetchRemainingArtistTracks fetches and creates jobs for remaining artist tracks in the background
 func (h *JobsHandler) fetchRemainingArtistTracks(ctx context.Context, batchID, artistID, name string, userID int64, initialTrackIDs map[string]bool) {
+	log.Printf("[background-fetch] Goroutine STARTED! batchID=%s, artistID=%s, name=%s", batchID, artistID, name)
+
 	// Recover from any panics to prevent crashing the server
 	defer func() {
 		if r := recover(); r != nil {
