@@ -689,12 +689,19 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 		return nil, fmt.Errorf("failed to fetch artist albums: %w", err)
 	}
 
+	log.Printf("[full-fetch] Found %d albums for artist %s", len(albums), artistID)
+
 	// Collect all tracks from all albums with rate limiting and retries
 	var allTracks []Track
 	fetched := 0
 	failed := 0
 
 	for i, album := range albums {
+		// Log progress every 10 albums
+		if i > 0 && i%10 == 0 {
+			log.Printf("[full-fetch] Progress: %d/%d albums processed (fetched: %d, failed: %d, tracks: %d)", i, len(albums), fetched, failed, len(allTracks))
+		}
+
 		select {
 		case <-ctx.Done():
 			// Context cancelled/timeout - return partial results with warning
@@ -758,6 +765,7 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 		if albumResult != nil {
 			allTracks = append(allTracks, albumResult.Tracks...)
 			fetched++
+			log.Printf("[full-fetch] Successfully fetched album %d/%d: %s (%d tracks, total so far: %d)", fetched, len(albums), album.Name, len(albumResult.Tracks), len(allTracks))
 		} else if fetchErr != nil && !errors.Is(fetchErr, ErrRateLimited) {
 			// Already counted in the inner loop
 		}
@@ -766,6 +774,7 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 	// Check if there were failures
 	if failed > 0 {
 		warning := fmt.Sprintf("failed to fetch %d of %d albums", failed, len(albums))
+		log.Printf("[full-fetch] Completed with failures: %d tracks from %d albums (failed: %d)", len(allTracks), fetched, failed)
 		return &DiscographyResult{
 			Name:        artistResp.Name,
 			Tracks:      allTracks,
@@ -776,6 +785,7 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 		}, nil
 	}
 
+	log.Printf("[full-fetch] Successfully fetched %d tracks from %d albums (failed: %d)", len(allTracks), fetched, failed)
 	return &DiscographyResult{
 		Name:        artistResp.Name,
 		Tracks:      allTracks,

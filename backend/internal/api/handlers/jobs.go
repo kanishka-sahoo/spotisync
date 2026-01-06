@@ -196,11 +196,17 @@ func (h *JobsHandler) fetchRemainingArtistTracks(ctx context.Context, batchID, a
 		return
 	}
 
+	log.Printf("[background-fetch] Fetched %d total tracks from discography for artist %s", len(discographyResult.Tracks), name)
+
 	// Create jobs for tracks not already created
+	log.Printf("[background-fetch] Checking %d initial track IDs for deduplication", len(initialTrackIDs))
+
 	additionalJobs := 0
+	skippedDuplicates := 0
 	for _, track := range discographyResult.Tracks {
 		// Skip if we already created a job for this track
 		if initialTrackIDs[track.ID] {
+			skippedDuplicates++
 			continue
 		}
 
@@ -237,7 +243,7 @@ func (h *JobsHandler) fetchRemainingArtistTracks(ctx context.Context, batchID, a
 		additionalJobs++
 	}
 
-	log.Printf("[background-fetch] Fetched %d additional tracks for artist %s", additionalJobs, name)
+	log.Printf("[background-fetch] Fetched %d total tracks, skipped %d duplicates, created %d new jobs for artist %s", len(discographyResult.Tracks), skippedDuplicates, additionalJobs, name)
 }
 
 // ListJobs handles GET /api/v1/jobs
