@@ -69,25 +69,46 @@ func (h *PreviewHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse and validate Spotify URL
-	resourceType, _, err := spotify.ParseSpotifyURL(req.SpotifyURL)
+	resourceType, resourceID, err := spotify.ParseSpotifyURL(req.SpotifyURL)
 	if err != nil {
 		http.Error(w, "invalid Spotify URL: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Fetch tracks from Spotify API
-	tracks, name, err := h.spotifyClient.GetTracksFromURL(r.Context(), req.SpotifyURL)
-	if err != nil {
-		if errors.Is(err, spotify.ErrNotFound) {
-			http.Error(w, "Spotify resource not found", http.StatusNotFound)
+	var tracks []spotify.Track
+	var name string
+	if resourceType == "artist" {
+		discographyResult, err := h.spotifyClient.GetArtistDiscography(r.Context(), resourceID, true)
+		if err != nil {
+			if errors.Is(err, spotify.ErrNotFound) {
+				http.Error(w, "Spotify resource not found", http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, spotify.ErrInvalidCredentials) {
+				http.Error(w, "Spotify API credentials not configured", http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, "failed to fetch Spotify data: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		if errors.Is(err, spotify.ErrInvalidCredentials) {
-			http.Error(w, "Spotify API credentials not configured", http.StatusServiceUnavailable)
+		tracks = discographyResult.Tracks
+		name = discographyResult.Name
+	} else {
+		var err error
+		tracks, name, err = h.spotifyClient.GetTracksFromURL(r.Context(), req.SpotifyURL)
+		if err != nil {
+			if errors.Is(err, spotify.ErrNotFound) {
+				http.Error(w, "Spotify resource not found", http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, spotify.ErrInvalidCredentials) {
+				http.Error(w, "Spotify API credentials not configured", http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, "failed to fetch Spotify data: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		http.Error(w, "failed to fetch Spotify data: "+err.Error(), http.StatusBadGateway)
-		return
 	}
 
 	if len(tracks) == 0 {

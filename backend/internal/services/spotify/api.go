@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -50,6 +51,15 @@ type AlbumResult struct {
 	Tracks      []Track
 }
 
+// DiscographyResult contains partial results for artist discography with warning
+type DiscographyResult struct {
+	Name    string
+	Tracks  []Track
+	Fetched int
+	Failed  int
+	Warning string
+}
+
 // PlaylistResult contains playlist metadata and all its tracks.
 type PlaylistResult struct {
 	Name        string
@@ -70,7 +80,7 @@ type SpotifyClientInterface interface {
 	GetTrack(ctx context.Context, trackID string) (*Track, error)
 	GetAlbumTracks(ctx context.Context, albumID string) (*AlbumResult, error)
 	GetPlaylistTracks(ctx context.Context, playlistID string) (*PlaylistResult, error)
-	GetArtistDiscography(ctx context.Context, artistID string) (*ArtistResult, error)
+	GetArtistDiscography(ctx context.Context, artistID string, preview bool) (*DiscographyResult, error)
 	GetTracksFromURL(ctx context.Context, spotifyURL string) ([]Track, string, error)
 }
 
@@ -431,6 +441,16 @@ func (c *APIClient) GetTrack(ctx context.Context, trackID string) (*Track, error
 
 // GetAlbumTracks retrieves all tracks from an album.
 func (c *APIClient) GetAlbumTracks(ctx context.Context, albumID string) (*AlbumResult, error) {
+	return c.getAlbumTracksInternal(ctx, albumID, false)
+}
+
+// GetAlbumTracksNoISRC retrieves all tracks from an album without fetching ISRCs.
+func (c *APIClient) GetAlbumTracksNoISRC(ctx context.Context, albumID string) (*AlbumResult, error) {
+	return c.getAlbumTracksInternal(ctx, albumID, true)
+}
+
+// getAlbumTracksInternal is the internal implementation that handles the skipISRC parameter.
+func (c *APIClient) getAlbumTracksInternal(ctx context.Context, albumID string, skipISRC bool) (*AlbumResult, error) {
 	if albumID == "" {
 		return nil, errors.New("album ID cannot be empty")
 	}
@@ -467,8 +487,11 @@ func (c *APIClient) GetAlbumTracks(ctx context.Context, albumID string) (*AlbumR
 	// Note: Simplified tracks don't have ISRC, so we need to fetch each track individually
 	tracks := make([]Track, 0, len(simplifiedTracks))
 	for _, st := range simplifiedTracks {
-		// Fetch ISRC for each track (with caching)
-		isrc := c.fetchTrackISRC(ctx, st.ID)
+		var isrc string
+		if !skipISRC {
+			// Fetch ISRC for each track (with caching)
+			isrc = c.fetchTrackISRC(ctx, st.ID)
+		}
 
 		artistNames := extractArtistNames(st.Artists)
 		primaryArtist := ""
@@ -579,7 +602,9 @@ func (c *APIClient) GetPlaylistTracks(ctx context.Context, playlistID string) (*
 }
 
 // GetArtistDiscography retrieves all tracks from all albums by an artist.
-func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string) (*ArtistResult, error) {
+// If preview is true, it uses GetAlbumTracksNoISRC for faster preview without ISRCs.
+// Returns partial results with a warning if timeout occurs for large discographies.
+func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, preview bool) (*DiscographyResult, error) {
 	if artistID == "" {
 		return nil, errors.New("artist ID cannot be empty")
 	}
@@ -600,27 +625,99 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string) (
 		return nil, fmt.Errorf("failed to fetch artist albums: %w", err)
 	}
 
-	// Collect all tracks from all albums
+	// Collect all tracks from all albums with rate limiting and retries
 	var allTracks []Track
-	for _, album := range albums {
+	fetched := 0
+	failed := 0
+
+	for i, album := range albums {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			// Context cancelled/timeout - return partial results with warning
+			warning := fmt.Sprintf("timeout after fetching %d of %d albums (failed: %d)", fetched, len(albums), failed)
+			return &DiscographyResult{
+				Name:    artistResp.Name,
+				Tracks:  allTracks,
+				Fetched: fetched,
+				Failed:  failed + (len(albums) - i),
+				Warning: warning,
+			}, nil
 		default:
 		}
 
-		albumResult, err := c.GetAlbumTracks(ctx, album.ID)
-		if err != nil {
-			log.Printf("Warning: failed to get tracks for album %s (%s): %v", album.Name, album.ID, err)
-			continue
+		// Add delay between each album fetch (200-500ms) to avoid hitting rate limits
+		if i > 0 {
+			delay := time.Duration(200+rand.Intn(300)) * time.Millisecond
+			if err := sleepWithContext(ctx, delay); err != nil {
+				warning := fmt.Sprintf("context cancelled after fetching %d of %d albums (failed: %d)", fetched, len(albums), failed)
+				return &DiscographyResult{
+					Name:    artistResp.Name,
+					Tracks:  allTracks,
+					Fetched: fetched,
+					Failed:  failed + (len(albums) - i),
+					Warning: warning,
+				}, nil
+			}
 		}
 
-		allTracks = append(allTracks, albumResult.Tracks...)
+		// Fetch album tracks with retry for rate limit errors
+		var albumResult *AlbumResult
+		var fetchErr error
+		maxRetries := 3
+		baseDelay := 1 * time.Second
+
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			if preview {
+				albumResult, fetchErr = c.GetAlbumTracksNoISRC(ctx, album.ID)
+			} else {
+				albumResult, fetchErr = c.GetAlbumTracks(ctx, album.ID)
+			}
+
+			if fetchErr == nil {
+				break
+			}
+
+			// Check if it's a rate limit error
+			if errors.Is(fetchErr, ErrRateLimited) {
+				delay := baseDelay * time.Duration(1<<attempt) // exponential backoff
+				log.Printf("Rate limited, retrying after %v (attempt %d/%d)", delay, attempt+1, maxRetries)
+				if err := sleepWithContext(ctx, delay); err != nil {
+					break
+				}
+				continue
+			}
+
+			// For non-rate-limit errors, log and continue to next album
+			log.Printf("Warning: failed to get tracks for album %s (%s): %v", album.Name, album.ID, fetchErr)
+			failed++
+			break
+		}
+
+		if albumResult != nil {
+			allTracks = append(allTracks, albumResult.Tracks...)
+			fetched++
+		} else if fetchErr != nil && !errors.Is(fetchErr, ErrRateLimited) {
+			// Already counted in the inner loop
+		}
 	}
 
-	return &ArtistResult{
-		Name:   artistResp.Name,
-		Tracks: allTracks,
+	// Check if there were failures
+	if failed > 0 {
+		warning := fmt.Sprintf("failed to fetch %d of %d albums", failed, len(albums))
+		return &DiscographyResult{
+			Name:    artistResp.Name,
+			Tracks:  allTracks,
+			Fetched: fetched,
+			Failed:  failed,
+			Warning: warning,
+		}, nil
+	}
+
+	return &DiscographyResult{
+		Name:    artistResp.Name,
+		Tracks:  allTracks,
+		Fetched: fetched,
+		Failed:  failed,
 	}, nil
 }
 
@@ -655,7 +752,7 @@ func (c *APIClient) GetTracksFromURL(ctx context.Context, spotifyURL string) ([]
 		return result.Tracks, result.Name, nil
 
 	case "artist":
-		result, err := c.GetArtistDiscography(ctx, resourceID)
+		result, err := c.GetArtistDiscography(ctx, resourceID, false)
 		if err != nil {
 			return nil, "", err
 		}

@@ -18,8 +18,8 @@ type MockSpotifyClient struct {
 	AlbumResultToReturn *AlbumResult
 	// PlaylistResult to return from GetPlaylistTracks
 	PlaylistResultToReturn *PlaylistResult
-	// ArtistResult to return from GetArtistDiscography
-	ArtistResultToReturn *ArtistResult
+	// DiscographyResult to return from GetArtistDiscography
+	DiscographyResultToReturn *DiscographyResult
 	// Record of calls made
 	GetTracksFromURLCalls []string
 }
@@ -102,16 +102,18 @@ func (m *MockSpotifyClient) GetPlaylistTracks(ctx context.Context, playlistID st
 }
 
 // GetArtistDiscography returns mock artist tracks or configured error.
-func (m *MockSpotifyClient) GetArtistDiscography(ctx context.Context, artistID string) (*ArtistResult, error) {
+func (m *MockSpotifyClient) GetArtistDiscography(ctx context.Context, artistID string, preview bool) (*DiscographyResult, error) {
 	if m.ErrorToReturn != nil {
 		return nil, m.ErrorToReturn
 	}
-	if m.ArtistResultToReturn != nil {
-		return m.ArtistResultToReturn, nil
+	if m.DiscographyResultToReturn != nil {
+		return m.DiscographyResultToReturn, nil
 	}
-	return &ArtistResult{
-		Name:   m.NameToReturn,
-		Tracks: m.TracksToReturn,
+	return &DiscographyResult{
+		Name:    m.NameToReturn,
+		Tracks:  m.TracksToReturn,
+		Fetched: len(m.TracksToReturn),
+		Failed:  0,
 	}, nil
 }
 

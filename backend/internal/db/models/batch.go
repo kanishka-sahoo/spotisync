@@ -33,6 +33,7 @@ const (
 	SpotifyTypeAlbum    SpotifyType = "album"
 	SpotifyTypePlaylist SpotifyType = "playlist"
 	SpotifyTypeArtist   SpotifyType = "artist"
+	SpotifyTypeTrack    SpotifyType = "track"
 )
 
 // Batch represents a batch of download jobs from a single Spotify URL
