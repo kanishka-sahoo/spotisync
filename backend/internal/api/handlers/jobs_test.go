@@ -41,7 +41,7 @@ func setupJobsHandler(t *testing.T) (*handlers.JobsHandler, *db.Database, *auth.
 		MaxRetries: 3,
 		Delays:     []time.Duration{time.Second, time.Second * 5, time.Second * 30},
 	}
-	jobScheduler := scheduler.NewJobScheduler(database, 2, retryPolicy)
+	jobScheduler := scheduler.NewJobScheduler(database, 2, retryPolicy, 100)
 
 	// Use mock Spotify client
 	mockSpotify := spotify.NewMockSpotifyClient()

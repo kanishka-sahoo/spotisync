@@ -53,11 +53,12 @@ type AlbumResult struct {
 
 // DiscographyResult contains partial results for artist discography with warning
 type DiscographyResult struct {
-	Name    string
-	Tracks  []Track
-	Fetched int
-	Failed  int
-	Warning string
+	Name        string
+	Tracks      []Track
+	Fetched     int
+	Failed      int
+	Warning     string
+	TotalTracks int
 }
 
 // PlaylistResult contains playlist metadata and all its tracks.
@@ -602,7 +603,12 @@ func (c *APIClient) GetPlaylistTracks(ctx context.Context, playlistID string) (*
 }
 
 // GetArtistDiscography retrieves all tracks from all albums by an artist.
-// If preview is true, it uses GetAlbumTracksNoISRC for faster preview without ISRCs.
+// If preview is true, it uses an optimized path that:
+//   - Fetches only album metadata (no tracks) to count total tracks
+//   - Returns only the first 20 tracks
+//   - Skips delays for faster preview
+//
+// For non-preview mode (full download), it fetches all tracks with rate limiting delays.
 // Returns partial results with a warning if timeout occurs for large discographies.
 func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, preview bool) (*DiscographyResult, error) {
 	if artistID == "" {
@@ -617,6 +623,64 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 		return nil, fmt.Errorf("failed to get artist %s: %w", artistID, err)
 	}
 
+	// Preview mode: optimized path
+	if preview {
+		log.Printf("Starting preview discography fetch for artist: %s", artistID)
+
+		// Fetch all albums (simplified, without tracks) to get album metadata and count total tracks
+		albumsEndpoint := fmt.Sprintf("%s/artists/%s/albums?include_groups=album,single,compilation&limit=50", spotifyAPIBaseURL, artistID)
+
+		var albums []spotifyAlbumSimplified
+		if err := fetchPaging(ctx, c, albumsEndpoint, &albums); err != nil {
+			return nil, fmt.Errorf("failed to fetch artist albums: %w", err)
+		}
+
+		// Count total tracks from album metadata
+		totalTracks := 0
+		for _, album := range albums {
+			totalTracks += album.TotalTracks
+		}
+		log.Printf("Found %d albums with %d total tracks", len(albums), totalTracks)
+
+		// Collect first 20 tracks by traversing albums in order
+		var previewTracks []Track
+		collected := 0
+		for _, album := range albums {
+			if collected >= 20 {
+				break
+			}
+
+			log.Printf("Fetching tracks for album %d/%d: %s", len(previewTracks)+1, len(albums), album.Name)
+
+			// Fetch album tracks (without ISRC for speed)
+			albumResult, err := c.GetAlbumTracksNoISRC(ctx, album.ID)
+			if err != nil {
+				log.Printf("Warning: failed to fetch tracks for album %s: %v", album.Name, err)
+				continue
+			}
+
+			// Add tracks from this album until we have 20 total
+			remaining := 20 - collected
+			if len(albumResult.Tracks) <= remaining {
+				previewTracks = append(previewTracks, albumResult.Tracks...)
+				collected += len(albumResult.Tracks)
+			} else {
+				previewTracks = append(previewTracks, albumResult.Tracks[:remaining]...)
+				collected = 20
+			}
+		}
+
+		log.Printf("Preview fetch complete: collected %d of %d tracks", collected, totalTracks)
+
+		return &DiscographyResult{
+			Name:        artistResp.Name,
+			Tracks:      previewTracks,
+			Fetched:     len(albums),
+			TotalTracks: totalTracks,
+		}, nil
+	}
+
+	// Full download mode (existing implementation with rate limiting)
 	// Get all albums (albums, singles, compilations)
 	albumsEndpoint := fmt.Sprintf("%s/artists/%s/albums?include_groups=album,single,compilation&limit=50", spotifyAPIBaseURL, artistID)
 
@@ -636,11 +700,12 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 			// Context cancelled/timeout - return partial results with warning
 			warning := fmt.Sprintf("timeout after fetching %d of %d albums (failed: %d)", fetched, len(albums), failed)
 			return &DiscographyResult{
-				Name:    artistResp.Name,
-				Tracks:  allTracks,
-				Fetched: fetched,
-				Failed:  failed + (len(albums) - i),
-				Warning: warning,
+				Name:        artistResp.Name,
+				Tracks:      allTracks,
+				Fetched:     fetched,
+				Failed:      failed + (len(albums) - i),
+				Warning:     warning,
+				TotalTracks: len(allTracks),
 			}, nil
 		default:
 		}
@@ -651,11 +716,12 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 			if err := sleepWithContext(ctx, delay); err != nil {
 				warning := fmt.Sprintf("context cancelled after fetching %d of %d albums (failed: %d)", fetched, len(albums), failed)
 				return &DiscographyResult{
-					Name:    artistResp.Name,
-					Tracks:  allTracks,
-					Fetched: fetched,
-					Failed:  failed + (len(albums) - i),
-					Warning: warning,
+					Name:        artistResp.Name,
+					Tracks:      allTracks,
+					Fetched:     fetched,
+					Failed:      failed + (len(albums) - i),
+					Warning:     warning,
+					TotalTracks: len(allTracks),
 				}, nil
 			}
 		}
@@ -667,11 +733,7 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 		baseDelay := 1 * time.Second
 
 		for attempt := 0; attempt < maxRetries; attempt++ {
-			if preview {
-				albumResult, fetchErr = c.GetAlbumTracksNoISRC(ctx, album.ID)
-			} else {
-				albumResult, fetchErr = c.GetAlbumTracks(ctx, album.ID)
-			}
+			albumResult, fetchErr = c.GetAlbumTracks(ctx, album.ID)
 
 			if fetchErr == nil {
 				break
@@ -705,19 +767,20 @@ func (c *APIClient) GetArtistDiscography(ctx context.Context, artistID string, p
 	if failed > 0 {
 		warning := fmt.Sprintf("failed to fetch %d of %d albums", failed, len(albums))
 		return &DiscographyResult{
-			Name:    artistResp.Name,
-			Tracks:  allTracks,
-			Fetched: fetched,
-			Failed:  failed,
-			Warning: warning,
+			Name:        artistResp.Name,
+			Tracks:      allTracks,
+			Fetched:     fetched,
+			Failed:      failed,
+			Warning:     warning,
+			TotalTracks: len(allTracks),
 		}, nil
 	}
 
 	return &DiscographyResult{
-		Name:    artistResp.Name,
-		Tracks:  allTracks,
-		Fetched: fetched,
-		Failed:  failed,
+		Name:        artistResp.Name,
+		Tracks:      allTracks,
+		Fetched:     fetched,
+		TotalTracks: len(allTracks),
 	}, nil
 }
 

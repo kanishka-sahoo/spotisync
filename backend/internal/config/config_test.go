@@ -131,7 +131,7 @@ database:
 	assert.Equal(t, 5*time.Minute, cfg.Database.ConnMaxLifetime)
 	assert.Equal(t, "./data/temp", cfg.Storage.TempDir)
 	assert.Equal(t, ByteSize(500*1024*1024), cfg.Storage.MaxFileSize)
-	assert.Equal(t, 2, cfg.Workers.Count)
+	assert.Equal(t, 4, cfg.Workers.Count)
 	assert.Equal(t, 3, cfg.Workers.RetryMax)
 	assert.Equal(t, []time.Duration{1 * time.Minute, 5 * time.Minute, 15 * time.Minute}, cfg.Workers.RetryDelays)
 }

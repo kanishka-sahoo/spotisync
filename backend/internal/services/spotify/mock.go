@@ -110,10 +110,11 @@ func (m *MockSpotifyClient) GetArtistDiscography(ctx context.Context, artistID s
 		return m.DiscographyResultToReturn, nil
 	}
 	return &DiscographyResult{
-		Name:    m.NameToReturn,
-		Tracks:  m.TracksToReturn,
-		Fetched: len(m.TracksToReturn),
-		Failed:  0,
+		Name:        m.NameToReturn,
+		Tracks:      m.TracksToReturn,
+		Fetched:     len(m.TracksToReturn),
+		TotalTracks: len(m.TracksToReturn),
+		Failed:      0,
 	}, nil
 }
 

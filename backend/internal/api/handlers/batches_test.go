@@ -41,7 +41,7 @@ func setupBatchesHandler(t *testing.T) (*handlers.BatchesHandler, *handlers.Jobs
 		MaxRetries: 3,
 		Delays:     []time.Duration{time.Second, time.Second * 5, time.Second * 30},
 	}
-	jobScheduler := scheduler.NewJobScheduler(database, 2, retryPolicy)
+	jobScheduler := scheduler.NewJobScheduler(database, 2, retryPolicy, 100)
 	cfg := &config.Config{
 		Spotify: config.ServiceConfig{
 			Username: "test-client-id",
@@ -49,7 +49,7 @@ func setupBatchesHandler(t *testing.T) (*handlers.BatchesHandler, *handlers.Jobs
 		},
 	}
 	// Create a navidrome syncer for testing
-	playlistSyncer := navidrome.NewSyncer(database)
+	playlistSyncer := navidrome.NewSyncer(database, nil)
 	batchesHandler := handlers.NewBatchesHandler(database, jwtManager, jobScheduler, playlistSyncer)
 	jobsHandler := handlers.NewJobsHandler(database, jobScheduler, jwtManager, cfg)
 	return batchesHandler, jobsHandler, database, jwtManager
