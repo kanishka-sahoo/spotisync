@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"spotisync/internal/api/middleware"
 	"spotisync/internal/auth"
@@ -72,14 +74,34 @@ func (h *JobsHandler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate and parse Spotify URL
-	spotifyType, _, err := spotify.ParseSpotifyURL(req.SpotifyURL)
+	spotifyType, resourceID, err := spotify.ParseSpotifyURL(req.SpotifyURL)
 	if err != nil {
 		http.Error(w, "invalid Spotify URL: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Fetch tracks from Spotify API
-	tracks, name, err := h.spotifyClient.GetTracksFromURL(r.Context(), req.SpotifyURL)
+	// Fetch tracks from Spotify API using fast path for artists
+	var tracks []spotify.Track
+	var name string
+	var totalJobs int
+	if spotifyType == "artist" {
+		var discographyResult *spotify.DiscographyResult
+		discographyResult, err = h.spotifyClient.GetArtistDiscography(r.Context(), resourceID, true)
+		if err == nil {
+			tracks = discographyResult.Tracks
+			name = discographyResult.Name
+			totalJobs = discographyResult.TotalTracks
+		} else {
+			totalJobs = 0
+		}
+	} else {
+		tracks, name, err = h.spotifyClient.GetTracksFromURL(r.Context(), req.SpotifyURL)
+		if err == nil {
+			totalJobs = len(tracks)
+		} else {
+			totalJobs = 0
+		}
+	}
 	if err != nil {
 		if errors.Is(err, spotify.ErrNotFound) {
 			http.Error(w, "Spotify resource not found", http.StatusNotFound)
@@ -100,15 +122,21 @@ func (h *JobsHandler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 
 	// Create batch
 	batch := models.NewBatch(userID, req.SpotifyURL, spotifyType, name)
-	batch.TotalJobs = len(tracks)
+	batch.TotalJobs = totalJobs
 
 	if err := h.db.CreateBatch(batch); err != nil {
 		http.Error(w, "failed to create batch: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Track initial track IDs for deduplication
+	initialTrackIDs := make(map[string]bool)
+
 	// Create jobs for each track
 	for _, track := range tracks {
+		// Track this ID to avoid duplicates in background fetch
+		initialTrackIDs[track.ID] = true
+
 		// Convert spotify.Track to models.SpotifyTrack
 		spotifyTrack := &models.SpotifyTrack{
 			ID:           track.ID,
@@ -140,9 +168,76 @@ func (h *JobsHandler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 		h.jobScheduler.Enqueue(job.ID, userID)
 	}
 
+	// Start background fetch for remaining artist tracks
+	if spotifyType == "artist" && totalJobs > len(tracks) {
+		go h.fetchRemainingArtistTracks(context.Background(), batch.ID, resourceID, name, userID, initialTrackIDs)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(batch.ToResponse())
+}
+
+// fetchRemainingArtistTracks fetches and creates jobs for remaining artist tracks in the background
+func (h *JobsHandler) fetchRemainingArtistTracks(ctx context.Context, batchID, artistID, name string, userID int64, initialTrackIDs map[string]bool) {
+	// Recover from any panics to prevent crashing the server
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[background-fetch] panic while fetching remaining tracks for artist %s: %v", name, r)
+		}
+	}()
+
+	log.Printf("[background-fetch] Starting background fetch for artist %s", name)
+
+	// Fetch full discography (preview=false)
+	discographyResult, err := h.spotifyClient.GetArtistDiscography(ctx, artistID, false)
+	if err != nil {
+		log.Printf("[background-fetch] Failed to fetch full discography for artist %s: %v", name, err)
+		return
+	}
+
+	// Create jobs for tracks not already created
+	additionalJobs := 0
+	for _, track := range discographyResult.Tracks {
+		// Skip if we already created a job for this track
+		if initialTrackIDs[track.ID] {
+			continue
+		}
+
+		// Convert spotify.Track to models.SpotifyTrack
+		spotifyTrack := &models.SpotifyTrack{
+			ID:           track.ID,
+			Name:         track.Name,
+			Artist:       track.Artist,
+			Artists:      track.Artists,
+			Album:        track.Album,
+			AlbumID:      track.AlbumID,
+			AlbumArtist:  track.AlbumArtist,
+			AlbumArtists: track.AlbumArtists,
+			TrackNumber:  track.TrackNumber,
+			DiscNumber:   track.DiscNumber,
+			DurationMs:   track.DurationMs,
+			ISRC:         track.ISRC,
+			ReleaseYear:  track.ReleaseYear,
+			ReleaseDate:  track.ReleaseDate,
+			TotalTracks:  track.TotalTracks,
+			CoverArtURL:  track.CoverArtURL,
+			Explicit:     track.Explicit,
+		}
+
+		job := models.NewJob(batchID, userID, spotifyTrack)
+		if err := h.db.CreateJob(job); err != nil {
+			// Log error but continue with other jobs
+			log.Printf("[background-fetch] Failed to create job for track %s - %s: %v", track.Artist, track.Name, err)
+			continue
+		}
+
+		// Enqueue job for processing
+		h.jobScheduler.Enqueue(job.ID, userID)
+		additionalJobs++
+	}
+
+	log.Printf("[background-fetch] Fetched %d additional tracks for artist %s", additionalJobs, name)
 }
 
 // ListJobs handles GET /api/v1/jobs
